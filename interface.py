@@ -11,6 +11,7 @@ from PySide6.QtCore import (
 )
 
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -53,6 +54,8 @@ from acquisition_controller import (
 
 from acquisition_worker import (
     MeasurementWorker,
+    MonitoringWorker,
+    MonitoringData,
 )
 
 from experiments.transmission_loss import (
@@ -68,7 +71,7 @@ from exporter import (
 
 
 # ============================================================
-# CORES PADRÃO
+# CORES
 # ============================================================
 
 REFERENCE_COLOR = "#00C853"
@@ -88,22 +91,16 @@ class PlotPopup(QDialog):
         parent=None,
     ):
 
-        super().__init__(
-            parent
-        )
+        super().__init__(parent)
 
-        self.setWindowTitle(
-            title
-        )
+        self.setWindowTitle(title)
 
         self.resize(
             1100,
             750,
         )
 
-        layout = QVBoxLayout(
-            self
-        )
+        layout = QVBoxLayout(self)
 
         layout.setContentsMargins(
             6,
@@ -112,9 +109,7 @@ class PlotPopup(QDialog):
             6,
         )
 
-        layout.setSpacing(
-            5
-        )
+        layout.setSpacing(5)
 
         # ====================================================
         # GRÁFICO
@@ -141,7 +136,7 @@ class PlotPopup(QDialog):
         button_layout.addStretch()
 
         self.fit_button = QPushButton(
-            "Zoom to Fit"
+            "Fit"
         )
 
         self.close_button = QPushButton(
@@ -169,8 +164,6 @@ class PlotPopup(QDialog):
         )
 
     # ========================================================
-    # FIT
-    # ========================================================
 
     def fit(self):
 
@@ -188,17 +181,29 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         # ====================================================
-        # CONFIGURAÇÃO E HARDWARE
+        # CONFIGURAÇÃO
         # ====================================================
 
         self.config = AppConfig()
 
+        # ====================================================
+        # DAQ
+        # ====================================================
+
         self.daq = NIDaqDevice()
+
+        # ====================================================
+        # CONTROLADOR
+        # ====================================================
 
         self.controller = AcquisitionController(
             daq=self.daq,
             config=self.config,
         )
+
+        # ====================================================
+        # EXPERIMENTO
+        # ====================================================
 
         self.experiment = TransmissionLossExperiment(
             controller=self.controller,
@@ -211,10 +216,12 @@ class MainWindow(QMainWindow):
 
         self.last_measurement = None
 
+        self.last_monitoring_data = None
+
         self.tl_result = None
 
         # ====================================================
-        # THREAD DA MEDIÇÃO OFICIAL
+        # MEDIÇÃO OFICIAL
         # ====================================================
 
         self.measurement_thread = None
@@ -222,6 +229,22 @@ class MainWindow(QMainWindow):
         self.measurement_worker = None
 
         self.measurement_in_progress = False
+
+        # ====================================================
+        # MONITORAMENTO
+        # ====================================================
+
+        self.monitoring_thread = None
+
+        self.monitoring_worker = None
+
+        self.monitoring_running = False
+
+        self.monitoring_stop_requested = False
+
+        # Indica que o usuário clicou em Medir
+        # enquanto o monitor ainda estava ativo.
+        self.measurement_waiting_for_monitor = False
 
         # ====================================================
         # POP-UPS
@@ -247,7 +270,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # WIDGET CENTRAL
+        # CENTRAL
         # ====================================================
 
         central_widget = QWidget()
@@ -327,23 +350,17 @@ class MainWindow(QMainWindow):
             8,
         )
 
-        main_layout.setSpacing(
-            8
-        )
+        main_layout.setSpacing(8)
 
         # ====================================================
-        # GRID PRINCIPAL
+        # GRID
         # ====================================================
 
         config_grid = QGridLayout()
 
-        config_grid.setHorizontalSpacing(
-            12
-        )
+        config_grid.setHorizontalSpacing(12)
 
-        config_grid.setVerticalSpacing(
-            10
-        )
+        config_grid.setVerticalSpacing(10)
 
         config_grid.setColumnStretch(
             0,
@@ -413,23 +430,17 @@ class MainWindow(QMainWindow):
             acoustic_group
         )
 
-        self.temperature_input = (
-            QDoubleSpinBox()
-        )
+        self.temperature_input = QDoubleSpinBox()
 
         self.temperature_input.setRange(
             -20.0,
             60.0,
         )
 
-        self.temperature_input.setDecimals(
-            2
-        )
+        self.temperature_input.setDecimals(2)
 
         self.temperature_input.setValue(
-            self.config
-            .acoustics
-            .temperature_c
+            self.config.acoustics.temperature_c
         )
 
         self.temperature_input.setSuffix(
@@ -466,13 +477,9 @@ class MainWindow(QMainWindow):
             microphone_group
         )
 
-        self.reference_channel_combo = (
-            QComboBox()
-        )
+        self.reference_channel_combo = QComboBox()
 
-        self.mobile_channel_combo = (
-            QComboBox()
-        )
+        self.mobile_channel_combo = QComboBox()
 
         self.reference_sensitivity_input = (
             QDoubleSpinBox()
@@ -492,13 +499,9 @@ class MainWindow(QMainWindow):
                 1000.0,
             )
 
-            spinbox.setDecimals(
-                4
-            )
+            spinbox.setDecimals(4)
 
-            spinbox.setValue(
-                50.0
-            )
+            spinbox.setValue(50.0)
 
             spinbox.setSuffix(
                 " mV/Pa"
@@ -576,17 +579,11 @@ class MainWindow(QMainWindow):
             geometry_group
         )
 
-        self.diameter_input = (
-            QDoubleSpinBox()
-        )
+        self.diameter_input = QDoubleSpinBox()
 
-        self.spacing12_input = (
-            QDoubleSpinBox()
-        )
+        self.spacing12_input = QDoubleSpinBox()
 
-        self.spacing34_input = (
-            QDoubleSpinBox()
-        )
+        self.spacing34_input = QDoubleSpinBox()
 
         for spinbox in (
             self.diameter_input,
@@ -599,9 +596,7 @@ class MainWindow(QMainWindow):
                 1000.0,
             )
 
-            spinbox.setDecimals(
-                2
-            )
+            spinbox.setDecimals(2)
 
             spinbox.setSuffix(
                 " mm"
@@ -685,18 +680,14 @@ class MainWindow(QMainWindow):
             acquisition_group
         )
 
-        self.sample_rate_input = (
-            QDoubleSpinBox()
-        )
+        self.sample_rate_input = QDoubleSpinBox()
 
         self.sample_rate_input.setRange(
             100.0,
             51200.0,
         )
 
-        self.sample_rate_input.setDecimals(
-            2
-        )
+        self.sample_rate_input.setDecimals(2)
 
         self.sample_rate_input.setValue(
             self.config
@@ -708,9 +699,7 @@ class MainWindow(QMainWindow):
             " Hz"
         )
 
-        self.num_samples_input = (
-            QSpinBox()
-        )
+        self.num_samples_input = QSpinBox()
 
         self.num_samples_input.setRange(
             128,
@@ -723,9 +712,7 @@ class MainWindow(QMainWindow):
             .num_samples
         )
 
-        self.num_averages_input = (
-            QSpinBox()
-        )
+        self.num_averages_input = QSpinBox()
 
         self.num_averages_input.setRange(
             1,
@@ -747,9 +734,7 @@ class MainWindow(QMainWindow):
             60.0,
         )
 
-        self.stabilization_input.setDecimals(
-            2
-        )
+        self.stabilization_input.setDecimals(2)
 
         self.stabilization_input.setValue(
             self.config
@@ -834,21 +819,13 @@ class MainWindow(QMainWindow):
             metadata_group
         )
 
-        self.experiment_name_input = (
-            QLineEdit()
-        )
+        self.experiment_name_input = QLineEdit()
 
-        self.experiment_number_input = (
-            QLineEdit()
-        )
+        self.experiment_number_input = QLineEdit()
 
-        self.operator_input = (
-            QLineEdit()
-        )
+        self.operator_input = QLineEdit()
 
-        self.notes_input = (
-            QTextEdit()
-        )
+        self.notes_input = QTextEdit()
 
         self.notes_input.setMaximumHeight(
             90
@@ -880,10 +857,6 @@ class MainWindow(QMainWindow):
             1,
         )
 
-        # ====================================================
-        # GRID NA ABA
-        # ====================================================
-
         main_layout.addLayout(
             config_grid
         )
@@ -900,14 +873,10 @@ class MainWindow(QMainWindow):
             save_group
         )
 
-        self.output_directory_input = (
-            QLineEdit()
-        )
+        self.output_directory_input = QLineEdit()
 
-        self.output_directory_button = (
-            QPushButton(
-                "Procurar..."
-            )
+        self.output_directory_button = QPushButton(
+            "Procurar..."
         )
 
         self.output_directory_button.clicked.connect(
@@ -932,7 +901,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # APLICAR CONFIGURAÇÃO
+        # APLICAR
         # ====================================================
 
         self.apply_config_button = QPushButton(
@@ -953,7 +922,7 @@ class MainWindow(QMainWindow):
         main_layout.addStretch()
 
         # ====================================================
-        # SINAIS
+        # SIGNALS
         # ====================================================
 
         self.sample_rate_input.valueChanged.connect(
@@ -991,7 +960,7 @@ class MainWindow(QMainWindow):
         self._update_valid_range_preview()
 
     # ========================================================
-    # PAINEL DE GRÁFICO
+    # PAINEL DOS GRÁFICOS
     # ========================================================
 
     def _create_plot_panel(
@@ -1004,9 +973,7 @@ class MainWindow(QMainWindow):
 
         panel = QWidget()
 
-        layout = QVBoxLayout(
-            panel
-        )
+        layout = QVBoxLayout(panel)
 
         layout.setContentsMargins(
             2,
@@ -1015,13 +982,7 @@ class MainWindow(QMainWindow):
             2,
         )
 
-        layout.setSpacing(
-            2
-        )
-
-        # ====================================================
-        # CABEÇALHO
-        # ====================================================
+        layout.setSpacing(2)
 
         header = QHBoxLayout()
 
@@ -1032,9 +993,7 @@ class MainWindow(QMainWindow):
             0,
         )
 
-        header.setSpacing(
-            4
-        )
+        header.setSpacing(4)
 
         title_label = QLabel(
             title
@@ -1060,16 +1019,12 @@ class MainWindow(QMainWindow):
         # ====================================================
 
         fit_button = QPushButton(
-            "Zoom to Fit"
+            "Fit"
         )
 
-        fit_button.setFixedHeight(
-            24
-        )
+        fit_button.setFixedHeight(24)
 
-        fit_button.setMaximumWidth(
-            50
-        )
+        fit_button.setMaximumWidth(50)
 
         fit_button.clicked.connect(
             fit_callback
@@ -1086,16 +1041,12 @@ class MainWindow(QMainWindow):
         if popup_callback is not None:
 
             popup_button = QPushButton(
-                "Expandir"
+                "Pop-up"
             )
 
-            popup_button.setFixedHeight(
-                24
-            )
+            popup_button.setFixedHeight(24)
 
-            popup_button.setMaximumWidth(
-                75
-            )
+            popup_button.setMaximumWidth(75)
 
             popup_button.clicked.connect(
                 popup_callback
@@ -1108,10 +1059,6 @@ class MainWindow(QMainWindow):
         layout.addLayout(
             header
         )
-
-        # ====================================================
-        # GRÁFICO
-        # ====================================================
 
         plot_widget.setSizePolicy(
             QSizePolicy.Expanding,
@@ -1142,9 +1089,7 @@ class MainWindow(QMainWindow):
             5,
         )
 
-        main_layout.setSpacing(
-            5
-        )
+        main_layout.setSpacing(5)
 
         # ====================================================
         # TOPO
@@ -1152,25 +1097,19 @@ class MainWindow(QMainWindow):
 
         top_layout = QHBoxLayout()
 
-        top_layout.setSpacing(
-            8
-        )
+        top_layout.setSpacing(8)
 
         # ====================================================
-        # QUALIDADE DA ÚLTIMA MEDIÇÃO
+        # QUALIDADE
         # ====================================================
 
         quality_group = QGroupBox(
             "Qualidade da última medição"
         )
 
-        quality_group.setMinimumWidth(
-            300
-        )
+        quality_group.setMinimumWidth(300)
 
-        quality_group.setMaximumWidth(
-            380
-        )
+        quality_group.setMaximumWidth(380)
 
         quality_layout = QFormLayout(
             quality_group
@@ -1183,29 +1122,17 @@ class MainWindow(QMainWindow):
             8,
         )
 
-        quality_layout.setVerticalSpacing(
-            5
-        )
+        quality_layout.setVerticalSpacing(5)
 
-        self.quality_status_label = QLabel(
-            "-"
-        )
+        self.quality_status_label = QLabel("-")
 
-        self.coherence_mean_label = QLabel(
-            "-"
-        )
+        self.coherence_mean_label = QLabel("-")
 
-        self.coherence_min_label = QLabel(
-            "-"
-        )
+        self.coherence_min_label = QLabel("-")
 
-        self.valid_points_label = QLabel(
-            "-"
-        )
+        self.valid_points_label = QLabel("-")
 
-        self.clipping_label = QLabel(
-            "-"
-        )
+        self.clipping_label = QLabel("-")
 
         quality_layout.addRow(
             "Status:",
@@ -1243,9 +1170,7 @@ class MainWindow(QMainWindow):
 
         right_top_layout = QVBoxLayout()
 
-        right_top_layout.setSpacing(
-            5
-        )
+        right_top_layout.setSpacing(5)
 
         # ====================================================
         # ETAPA ATUAL
@@ -1291,7 +1216,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # STATUS + PROGRESSO
+        # STATUS
         # ====================================================
 
         status_group = QGroupBox()
@@ -1307,9 +1232,7 @@ class MainWindow(QMainWindow):
             4,
         )
 
-        status_layout.setSpacing(
-            3
-        )
+        status_layout.setSpacing(3)
 
         self.status_label = QLabel(
             "AGUARDANDO"
@@ -1331,9 +1254,7 @@ class MainWindow(QMainWindow):
             100,
         )
 
-        self.progress_bar.setValue(
-            0
-        )
+        self.progress_bar.setValue(0)
 
         self.progress_bar.setMaximumHeight(
             22
@@ -1361,7 +1282,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # BOTÃO SINAL TEMPORAL
+        # BOTÃO TEMPORAL
         # ====================================================
 
         time_button_layout = QHBoxLayout()
@@ -1388,9 +1309,7 @@ class MainWindow(QMainWindow):
         # ESPECTRO
         # ====================================================
 
-        self.spectrum_plot = (
-            pg.PlotWidget()
-        )
+        self.spectrum_plot = pg.PlotWidget()
 
         self.spectrum_plot.setLabel(
             "left",
@@ -1408,10 +1327,6 @@ class MainWindow(QMainWindow):
             y=True,
         )
 
-        # ----------------------------------------------------
-        # LEGENDA
-        # ----------------------------------------------------
-
         self.spectrum_legend = (
             self.spectrum_plot.addLegend()
         )
@@ -1421,10 +1336,6 @@ class MainWindow(QMainWindow):
             parentPos=(0, 1),
             offset=(10, -10),
         )
-
-        # ----------------------------------------------------
-        # CURVAS
-        # ----------------------------------------------------
 
         self.spectrum_reference_curve = (
             self.spectrum_plot.plot(
@@ -1474,9 +1385,7 @@ class MainWindow(QMainWindow):
         # COERÊNCIA
         # ====================================================
 
-        self.coherence_plot = (
-            pg.PlotWidget()
-        )
+        self.coherence_plot = pg.PlotWidget()
 
         self.coherence_plot.setLabel(
             "left",
@@ -1536,14 +1445,10 @@ class MainWindow(QMainWindow):
 
         buttons_layout = QHBoxLayout()
 
-        buttons_layout.setSpacing(
-            5
-        )
+        buttons_layout.setSpacing(5)
 
-        self.start_experiment_button = (
-            QPushButton(
-                "Iniciar ensaio"
-            )
+        self.start_experiment_button = QPushButton(
+            "Iniciar ensaio"
         )
 
         self.measure_button = QPushButton(
@@ -1562,22 +1467,16 @@ class MainWindow(QMainWindow):
             "Aceitar"
         )
 
-        self.accept_warning_button = (
-            QPushButton(
-                "Aceitar com aviso"
-            )
+        self.accept_warning_button = QPushButton(
+            "Aceitar com aviso"
         )
 
-        self.confirm_load_button = (
-            QPushButton(
-                "Confirmar troca de carga"
-            )
+        self.confirm_load_button = QPushButton(
+            "Confirmar troca de carga"
         )
 
-        self.restart_button = (
-            QPushButton(
-                "Refazer ensaio do começo"
-            )
+        self.restart_button = QPushButton(
+            "Refazer ensaio do começo"
         )
 
         buttons_layout.addWidget(
@@ -1664,10 +1563,6 @@ class MainWindow(QMainWindow):
             self.results_tab
         )
 
-        # ====================================================
-        # GRÁFICO TL
-        # ====================================================
-
         self.tl_plot = pg.PlotWidget()
 
         self.tl_plot.setLabel(
@@ -1693,7 +1588,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # RESULTADO
+        # RESULTADOS
         # ====================================================
 
         result_group = QGroupBox(
@@ -1761,7 +1656,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # BANNER DE STATUS
+    # STATUS
     # ========================================================
 
     def _set_status_banner(
@@ -1840,7 +1735,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # POP-UP DO SINAL TEMPORAL
+    # POP-UP TEMPORAL
     # ========================================================
 
     def open_time_popup(self):
@@ -1874,23 +1769,13 @@ class MainWindow(QMainWindow):
             units="s",
         )
 
-        # ----------------------------------------------------
-        # LEGENDA
-        # ----------------------------------------------------
-
-        popup.legend = (
-            popup.plot.addLegend()
-        )
+        popup.legend = popup.plot.addLegend()
 
         popup.legend.anchor(
             itemPos=(0, 1),
             parentPos=(0, 1),
             offset=(10, -10),
         )
-
-        # ----------------------------------------------------
-        # CURVAS
-        # ----------------------------------------------------
 
         popup.reference_curve = (
             popup.plot.plot(
@@ -1916,6 +1801,24 @@ class MainWindow(QMainWindow):
             )
         )
 
+        # ====================================================
+        # ÚLTIMO BLOCO DO MONITOR
+        # ====================================================
+
+        if self.last_monitoring_data is not None:
+
+            data = self.last_monitoring_data
+
+            popup.reference_curve.setData(
+                data.time,
+                data.reference_signal,
+            )
+
+            popup.mobile_curve.setData(
+                data.time,
+                data.mobile_signal,
+            )
+
         self.time_popup = popup
 
         popup.finished.connect(
@@ -1931,7 +1834,7 @@ class MainWindow(QMainWindow):
         self.time_popup = None
 
     # ========================================================
-    # POP-UP DO ESPECTRO
+    # POP-UP ESPECTRO
     # ========================================================
 
     def open_spectrum_popup(self):
@@ -1964,23 +1867,13 @@ class MainWindow(QMainWindow):
             units="Hz",
         )
 
-        # ----------------------------------------------------
-        # LEGENDA
-        # ----------------------------------------------------
-
-        popup.legend = (
-            popup.plot.addLegend()
-        )
+        popup.legend = popup.plot.addLegend()
 
         popup.legend.anchor(
             itemPos=(0, 1),
             parentPos=(0, 1),
             offset=(10, -10),
         )
-
-        # ----------------------------------------------------
-        # CURVAS
-        # ----------------------------------------------------
 
         popup.reference_curve = (
             popup.plot.plot(
@@ -2006,15 +1899,31 @@ class MainWindow(QMainWindow):
             )
         )
 
-        # ----------------------------------------------------
-        # COPIA ÚLTIMA MEDIÇÃO
-        # ----------------------------------------------------
+        # ====================================================
+        # PRIORIDADE: MONITOR AO VIVO
+        # ====================================================
 
-        if self.last_measurement is not None:
+        if self.last_monitoring_data is not None:
 
-            result = (
-                self.last_measurement
+            data = self.last_monitoring_data
+
+            popup.reference_curve.setData(
+                data.frequency,
+                data.reference_spectrum,
             )
+
+            popup.mobile_curve.setData(
+                data.frequency,
+                data.mobile_spectrum,
+            )
+
+        # ====================================================
+        # FALLBACK: ÚLTIMA MEDIÇÃO OFICIAL
+        # ====================================================
+
+        elif self.last_measurement is not None:
+
+            result = self.last_measurement
 
             reference_spectrum = np.sqrt(
                 np.maximum(
@@ -2055,7 +1964,7 @@ class MainWindow(QMainWindow):
         self.spectrum_popup = None
 
     # ========================================================
-    # POP-UP DA COERÊNCIA
+    # POP-UP COERÊNCIA
     # ========================================================
 
     def open_coherence_popup(self):
@@ -2104,16 +2013,28 @@ class MainWindow(QMainWindow):
             )
         )
 
-        if self.last_measurement is not None:
+        # ====================================================
+        # PRIORIDADE: MONITOR
+        # ====================================================
+
+        if self.last_monitoring_data is not None:
+
+            data = self.last_monitoring_data
 
             popup.coherence_curve.setData(
-                self.last_measurement
-                .frf
-                .frequency,
+                data.coherence_frequency,
+                data.coherence,
+            )
 
-                self.last_measurement
-                .frf
-                .coherence,
+        # ====================================================
+        # FALLBACK
+        # ====================================================
+
+        elif self.last_measurement is not None:
+
+            popup.coherence_curve.setData(
+                self.last_measurement.frf.frequency,
+                self.last_measurement.frf.coherence,
             )
 
         self.coherence_popup = popup
@@ -2131,7 +2052,273 @@ class MainWindow(QMainWindow):
         self.coherence_popup = None
 
     # ========================================================
-    # DIRETÓRIO DE SALVAMENTO
+    # MONITORAMENTO
+    # ========================================================
+
+    def start_monitoring(self):
+
+        # Não disputa a DAQ com medição oficial.
+        if self.measurement_in_progress:
+
+            return
+
+        if self.measurement_waiting_for_monitor:
+
+            return
+
+        # Thread já existe e ainda está ativa.
+        if (
+            self.monitoring_thread is not None
+            and
+            self.monitoring_thread.isRunning()
+        ):
+
+            return
+
+        active_channels = [
+            channel
+            for channel in self.config.channels
+            if channel.enabled
+        ]
+
+        if len(active_channels) < 2:
+
+            return
+
+        # ====================================================
+        # THREAD
+        # ====================================================
+
+        self.monitoring_thread = QThread(
+            self
+        )
+
+        self.monitoring_worker = MonitoringWorker(
+            daq=self.daq,
+            config=self.config,
+            monitor_num_samples=256,
+            coherence_nperseg=512,
+        )
+
+        self.monitoring_worker.moveToThread(
+            self.monitoring_thread
+        )
+
+        # ====================================================
+        # CONEXÕES
+        # ====================================================
+
+        self.monitoring_thread.started.connect(
+            self.monitoring_worker.run
+        )
+
+        self.monitoring_worker.started.connect(
+            self._monitoring_started
+        )
+
+        self.monitoring_worker.data_ready.connect(
+            self._update_monitoring_plots
+        )
+
+        self.monitoring_worker.error.connect(
+            self._monitoring_error
+        )
+
+        self.monitoring_worker.done.connect(
+            self.monitoring_thread.quit
+        )
+
+        self.monitoring_worker.done.connect(
+            self.monitoring_worker.deleteLater
+        )
+
+        self.monitoring_thread.finished.connect(
+            self._monitoring_thread_finished
+        )
+
+        self.monitoring_thread.finished.connect(
+            self.monitoring_thread.deleteLater
+        )
+
+        self.monitoring_running = False
+
+        self.monitoring_stop_requested = False
+
+        self.monitoring_thread.start()
+
+    # ========================================================
+
+    def stop_monitoring(
+        self,
+        wait: bool = False,
+    ):
+
+        if self.monitoring_worker is None:
+
+            return
+
+        self.monitoring_stop_requested = True
+
+        # request_stop() usa threading.Event,
+        # portanto pode ser chamado daqui com segurança.
+        self.monitoring_worker.request_stop()
+
+        if (
+            wait
+            and
+            self.monitoring_thread is not None
+        ):
+
+            self.monitoring_thread.wait(
+                5000
+            )
+
+            # Permite que os sinais finished pendentes
+            # sejam processados antes de uma nova thread.
+            QApplication.processEvents()
+
+    # ========================================================
+
+    def _monitoring_started(self):
+
+        self.monitoring_running = True
+
+    # ========================================================
+
+    def _monitoring_thread_finished(self):
+
+        self.monitoring_running = False
+
+        self.monitoring_stop_requested = False
+
+        self.monitoring_thread = None
+
+        self.monitoring_worker = None
+
+        # ====================================================
+        # MEDIÇÃO ESTAVA AGUARDANDO O MONITOR
+        # ====================================================
+
+        if self.measurement_waiting_for_monitor:
+
+            self.measurement_waiting_for_monitor = False
+
+            self._start_measurement_thread()
+
+    # ========================================================
+
+    def _monitoring_error(
+        self,
+        message: str,
+    ):
+
+        self.monitoring_running = False
+
+        # Se o monitor estava sendo desligado
+        # intencionalmente, não mostra erro.
+        if self.monitoring_stop_requested:
+
+            return
+
+        QMessageBox.warning(
+            self,
+            "Monitoramento",
+            "O monitoramento contínuo foi "
+            "interrompido.\n\n"
+            f"{message}",
+        )
+
+    # ========================================================
+    # ATUALIZAÇÃO DOS GRÁFICOS
+    # ========================================================
+
+    def _update_monitoring_plots(
+        self,
+        data: MonitoringData,
+    ):
+
+        self.last_monitoring_data = data
+
+        # ====================================================
+        # ESPECTRO PRINCIPAL
+        # ====================================================
+
+        self.spectrum_reference_curve.setData(
+            data.frequency,
+            data.reference_spectrum,
+        )
+
+        self.spectrum_mobile_curve.setData(
+            data.frequency,
+            data.mobile_spectrum,
+        )
+
+        # ====================================================
+        # COERÊNCIA PRINCIPAL
+        # ====================================================
+
+        self.coherence_curve.setData(
+            data.coherence_frequency,
+            data.coherence,
+        )
+
+        # ====================================================
+        # TEMPORAL
+        # ====================================================
+
+        if (
+            self.time_popup is not None
+            and
+            self.time_popup.isVisible()
+        ):
+
+            self.time_popup.reference_curve.setData(
+                data.time,
+                data.reference_signal,
+            )
+
+            self.time_popup.mobile_curve.setData(
+                data.time,
+                data.mobile_signal,
+            )
+
+        # ====================================================
+        # ESPECTRO POP-UP
+        # ====================================================
+
+        if (
+            self.spectrum_popup is not None
+            and
+            self.spectrum_popup.isVisible()
+        ):
+
+            self.spectrum_popup.reference_curve.setData(
+                data.frequency,
+                data.reference_spectrum,
+            )
+
+            self.spectrum_popup.mobile_curve.setData(
+                data.frequency,
+                data.mobile_spectrum,
+            )
+
+        # ====================================================
+        # COERÊNCIA POP-UP
+        # ====================================================
+
+        if (
+            self.coherence_popup is not None
+            and
+            self.coherence_popup.isVisible()
+        ):
+
+            self.coherence_popup.coherence_curve.setData(
+                data.coherence_frequency,
+                data.coherence,
+            )
+
+    # ========================================================
+    # DIRETÓRIO
     # ========================================================
 
     def browse_output_directory(self):
@@ -2150,10 +2337,22 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # DETECÇÃO DA DAQ
+    # DAQ
     # ========================================================
 
     def refresh_devices(self):
+
+        # Evita mexer na DAQ enquanto o
+        # monitor possui a task.
+        if (
+            self.monitoring_thread is not None
+            and
+            self.monitoring_thread.isRunning()
+        ):
+
+            self.stop_monitoring(
+                wait=True
+            )
 
         try:
 
@@ -2185,9 +2384,7 @@ class MainWindow(QMainWindow):
                     device
                 )
 
-            selected_device = (
-                devices[0]
-            )
+            selected_device = devices[0]
 
             self.daq.connect(
                 selected_device
@@ -2227,18 +2424,14 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # LABELS DE AQUISIÇÃO
+    # LABELS AQUISIÇÃO
     # ========================================================
 
     def _update_acquisition_labels(self):
 
-        fs = (
-            self.sample_rate_input.value()
-        )
+        fs = self.sample_rate_input.value()
 
-        n = (
-            self.num_samples_input.value()
-        )
+        n = self.num_samples_input.value()
 
         if fs <= 0 or n <= 0:
 
@@ -2259,7 +2452,7 @@ class MainWindow(QMainWindow):
         self._update_valid_range_preview()
 
     # ========================================================
-    # LABELS ACÚSTICOS
+    # ACÚSTICA
     # ========================================================
 
     def _update_acoustic_labels(self):
@@ -2271,8 +2464,7 @@ class MainWindow(QMainWindow):
         c = (
             331.3
             +
-            0.606
-            * temperature
+            0.606 * temperature
         )
 
         self.sound_speed_label.setText(
@@ -2282,7 +2474,7 @@ class MainWindow(QMainWindow):
         self._update_valid_range_preview()
 
     # ========================================================
-    # PREVIEW DA FAIXA VÁLIDA
+    # FAIXA VÁLIDA
     # ========================================================
 
     def _update_valid_range_preview(self):
@@ -2296,8 +2488,7 @@ class MainWindow(QMainWindow):
             c = (
                 331.3
                 +
-                0.606
-                * temperature
+                0.606 * temperature
             )
 
             diameter = (
@@ -2358,13 +2549,40 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # APLICA CONFIGURAÇÃO
+    # APLICAR CONFIGURAÇÃO
     # ========================================================
 
     def apply_configuration(
         self,
         show_message: bool = True,
     ) -> bool:
+
+        # Não permite alterar configuração
+        # durante medição oficial.
+        if self.measurement_in_progress:
+
+            QMessageBox.warning(
+                self,
+                "Configuração",
+                "Não é possível alterar a configuração "
+                "durante uma medição.",
+            )
+
+            return False
+
+        # ====================================================
+        # LIBERA DAQ DO MONITOR
+        # ====================================================
+
+        if (
+            self.monitoring_thread is not None
+            and
+            self.monitoring_thread.isRunning()
+        ):
+
+            self.stop_monitoring(
+                wait=True
+            )
 
         try:
 
@@ -2378,13 +2596,11 @@ class MainWindow(QMainWindow):
                 )
 
             reference_channel = (
-                self.reference_channel_combo
-                .currentText()
+                self.reference_channel_combo.currentText()
             )
 
             mobile_channel = (
-                self.mobile_channel_combo
-                .currentText()
+                self.mobile_channel_combo.currentText()
             )
 
             if (
@@ -2401,13 +2617,19 @@ class MainWindow(QMainWindow):
                 self.device_combo.currentText()
             )
 
+            if not selected_device:
+
+                raise ValueError(
+                    "Nenhum dispositivo DAQ foi selecionado."
+                )
+
             self.daq.connect(
                 selected_device
             )
 
-            # ------------------------------------------------
+            # =================================================
             # AQUISIÇÃO
-            # ------------------------------------------------
+            # =================================================
 
             self.config.acquisition.sample_rate = (
                 self.sample_rate_input.value()
@@ -2429,17 +2651,17 @@ class MainWindow(QMainWindow):
                 self.window_combo.currentData()
             )
 
-            # ------------------------------------------------
+            # =================================================
             # ACÚSTICA
-            # ------------------------------------------------
+            # =================================================
 
             self.config.acoustics.temperature_c = (
                 self.temperature_input.value()
             )
 
-            # ------------------------------------------------
+            # =================================================
             # GEOMETRIA
-            # ------------------------------------------------
+            # =================================================
 
             self.config.transmission_loss.tube_diameter = (
                 self.diameter_input.value()
@@ -2460,9 +2682,9 @@ class MainWindow(QMainWindow):
                 self.auto_range_checkbox.isChecked()
             )
 
-            # ------------------------------------------------
-            # MICROFONES
-            # ------------------------------------------------
+            # =================================================
+            # CANAIS
+            # =================================================
 
             self.config.channels = [
 
@@ -2505,9 +2727,9 @@ class MainWindow(QMainWindow):
                 ),
             ]
 
-            # ------------------------------------------------
+            # =================================================
             # METADADOS
-            # ------------------------------------------------
+            # =================================================
 
             self.config.metadata.experiment_name = (
                 self.experiment_name_input.text()
@@ -2531,18 +2753,25 @@ class MainWindow(QMainWindow):
                 .strip()
             )
 
-            # ------------------------------------------------
+            # =================================================
             # VALIDAÇÃO
-            # ------------------------------------------------
+            # =================================================
 
             self.config.validate()
+
+            # =================================================
+            # MONITOR
+            # =================================================
+
+            self.start_monitoring()
 
             if show_message:
 
                 QMessageBox.information(
                     self,
                     "Configuração",
-                    "Configuração aplicada com sucesso.",
+                    "Configuração aplicada com sucesso.\n\n"
+                    "O monitoramento contínuo foi iniciado.",
                 )
 
             return True
@@ -2563,11 +2792,19 @@ class MainWindow(QMainWindow):
 
     def start_experiment(self):
 
-        if not self.apply_configuration(
-            show_message=False
+        # Se o monitor já estiver rodando,
+        # não precisamos reaplicar tudo.
+        if not (
+            self.monitoring_thread is not None
+            and
+            self.monitoring_thread.isRunning()
         ):
 
-            return
+            if not self.apply_configuration(
+                show_message=False
+            ):
+
+                return
 
         try:
 
@@ -2606,10 +2843,55 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # MEDIÇÃO COM QTHREAD
+    # SOLICITA MEDIÇÃO
     # ========================================================
 
     def measure_current_step(self):
+
+        if self.measurement_in_progress:
+
+            return
+
+        if self.measurement_waiting_for_monitor:
+
+            return
+
+        # ====================================================
+        # MONITOR EXISTE
+        # ====================================================
+
+        if (
+            self.monitoring_thread is not None
+            and
+            self.monitoring_thread.isRunning()
+        ):
+
+            self.measurement_waiting_for_monitor = True
+
+            self._set_status_banner(
+                "● PREPARANDO MEDIÇÃO...",
+                "running",
+            )
+
+            self._update_controls()
+
+            self.stop_monitoring(
+                wait=False
+            )
+
+            return
+
+        # ====================================================
+        # DAQ JÁ LIVRE
+        # ====================================================
+
+        self._start_measurement_thread()
+
+    # ========================================================
+    # THREAD DA MEDIÇÃO OFICIAL
+    # ========================================================
+
+    def _start_measurement_thread(self):
 
         if self.measurement_in_progress:
 
@@ -2621,9 +2903,7 @@ class MainWindow(QMainWindow):
             0
         )
 
-        step = (
-            self.experiment.current_step
-        )
+        step = self.experiment.current_step
 
         step_text = (
             step.value
@@ -2640,14 +2920,12 @@ class MainWindow(QMainWindow):
         # THREAD
         # ====================================================
 
-        self.measurement_thread = (
-            QThread(self)
+        self.measurement_thread = QThread(
+            self
         )
 
-        self.measurement_worker = (
-            MeasurementWorker(
-                self.experiment
-            )
+        self.measurement_worker = MeasurementWorker(
+            self.experiment
         )
 
         self.measurement_worker.moveToThread(
@@ -2663,7 +2941,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # WORKER → GUI
+        # SINAIS
         # ====================================================
 
         self.measurement_worker.progress.connect(
@@ -2687,7 +2965,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # ENCERRAMENTO
+        # FINALIZAÇÃO
         # ====================================================
 
         self.measurement_worker.done.connect(
@@ -2741,7 +3019,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # MENSAGEM DO WORKER
+    # MENSAGEM
     # ========================================================
 
     def _measurement_message(
@@ -2793,7 +3071,7 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # ERRO DE MEDIÇÃO
+    # ERRO
     # ========================================================
 
     def _measurement_error(
@@ -2813,7 +3091,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # MEDIÇÃO CANCELADA
+    # CANCELAMENTO
     # ========================================================
 
     def _measurement_cancelled(self):
@@ -2828,7 +3106,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # THREAD ENCERRADA
+    # THREAD MEDIÇÃO FINALIZADA
     # ========================================================
 
     def _measurement_thread_finished(self):
@@ -2841,11 +3119,35 @@ class MainWindow(QMainWindow):
 
         self._update_controls()
 
+        # ====================================================
+        # RETORNA AO MONITOR
+        # ====================================================
+
+        self.start_monitoring()
+
     # ========================================================
-    # CANCELAR
+    # CANCELAR MEDIÇÃO
     # ========================================================
 
     def cancel_measurement(self):
+
+        # Caso ainda estejamos apenas esperando
+        # o monitor liberar a DAQ.
+        if self.measurement_waiting_for_monitor:
+
+            self.measurement_waiting_for_monitor = False
+
+            self._set_status_banner(
+                "MEDIÇÃO CANCELADA",
+                "warning",
+            )
+
+            self._update_controls()
+
+            # Monitor já estava sendo encerrado.
+            # Quando terminar, ele poderá ser
+            # iniciado novamente.
+            return
 
         if not self.measurement_in_progress:
 
@@ -2859,7 +3161,7 @@ class MainWindow(QMainWindow):
         self.controller.cancel()
 
     # ========================================================
-    # MOSTRAR RESULTADO DA MEDIÇÃO
+    # RESULTADO DA MEDIÇÃO OFICIAL
     # ========================================================
 
     def _show_measurement_result(
@@ -2867,9 +3169,7 @@ class MainWindow(QMainWindow):
         result,
     ):
 
-        quality = (
-            result.quality
-        )
+        quality = result.quality
 
         # ====================================================
         # QUALIDADE
@@ -2898,7 +3198,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # ESPECTRO
+        # ESPECTRO DA MEDIÇÃO
         # ====================================================
 
         reference_spectrum = np.sqrt(
@@ -2926,7 +3226,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # COERÊNCIA
+        # COERÊNCIA OFICIAL
         # ====================================================
 
         self.coherence_curve.setData(
@@ -2970,14 +3270,14 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # FIT DOS GRÁFICOS PRINCIPAIS
+    # FIT
     # ========================================================
 
     def fit_spectrum_plot(self):
 
         self.spectrum_plot.getViewBox().autoRange()
 
-    # --------------------------------------------------------
+    # ========================================================
 
     def fit_coherence_plot(self):
 
@@ -3113,7 +3413,7 @@ class MainWindow(QMainWindow):
         self._update_controls()
 
     # ========================================================
-    # CONFIRMAR TROCA DE CARGA
+    # TROCA DE CARGA
     # ========================================================
 
     def confirm_load_change(self):
@@ -3143,12 +3443,16 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # REFAZER ENSAIO
+    # RESET
     # ========================================================
 
     def restart_experiment(self):
 
-        if self.measurement_in_progress:
+        if (
+            self.measurement_in_progress
+            or
+            self.measurement_waiting_for_monitor
+        ):
 
             QMessageBox.warning(
                 self,
@@ -3174,10 +3478,6 @@ class MainWindow(QMainWindow):
 
             return
 
-        # ====================================================
-        # RESET
-        # ====================================================
-
         self.experiment.reset()
 
         self.last_measurement = None
@@ -3192,102 +3492,22 @@ class MainWindow(QMainWindow):
         # QUALIDADE
         # ====================================================
 
-        self.quality_status_label.setText(
-            "-"
-        )
+        self.quality_status_label.setText("-")
 
-        self.coherence_mean_label.setText(
-            "-"
-        )
+        self.coherence_mean_label.setText("-")
 
-        self.coherence_min_label.setText(
-            "-"
-        )
+        self.coherence_min_label.setText("-")
 
-        self.valid_points_label.setText(
-            "-"
-        )
+        self.valid_points_label.setText("-")
 
-        self.clipping_label.setText(
-            "-"
-        )
+        self.clipping_label.setText("-")
+
+        # Não limpamos espectro/coerência do
+        # monitor porque eles representam
+        # a aquisição ao vivo.
 
         # ====================================================
-        # GRÁFICOS PRINCIPAIS
-        # ====================================================
-
-        self.coherence_curve.setData(
-            [],
-            [],
-        )
-
-        self.spectrum_reference_curve.setData(
-            [],
-            [],
-        )
-
-        self.spectrum_mobile_curve.setData(
-            [],
-            [],
-        )
-
-        # ====================================================
-        # POP-UP TEMPORAL
-        # ====================================================
-
-        if (
-            self.time_popup is not None
-            and
-            self.time_popup.isVisible()
-        ):
-
-            self.time_popup.reference_curve.setData(
-                [],
-                [],
-            )
-
-            self.time_popup.mobile_curve.setData(
-                [],
-                [],
-            )
-
-        # ====================================================
-        # POP-UP ESPECTRO
-        # ====================================================
-
-        if (
-            self.spectrum_popup is not None
-            and
-            self.spectrum_popup.isVisible()
-        ):
-
-            self.spectrum_popup.reference_curve.setData(
-                [],
-                [],
-            )
-
-            self.spectrum_popup.mobile_curve.setData(
-                [],
-                [],
-            )
-
-        # ====================================================
-        # POP-UP COERÊNCIA
-        # ====================================================
-
-        if (
-            self.coherence_popup is not None
-            and
-            self.coherence_popup.isVisible()
-        ):
-
-            self.coherence_popup.coherence_curve.setData(
-                [],
-                [],
-            )
-
-        # ====================================================
-        # TL
+        # RESULTADO TL
         # ====================================================
 
         self.tl_plot.clear()
@@ -3316,9 +3536,7 @@ class MainWindow(QMainWindow):
                 self.experiment.process()
             )
 
-            result = (
-                self.tl_result
-            )
+            result = self.tl_result
 
             self.tl_plot.clear()
 
@@ -3327,12 +3545,10 @@ class MainWindow(QMainWindow):
             )
 
             # =================================================
-            # PONTOS VÁLIDOS
+            # VÁLIDOS
             # =================================================
 
-            if np.any(
-                valid_mask
-            ):
+            if np.any(valid_mask):
 
                 frequency_plot = (
                     result.frequency[
@@ -3441,7 +3657,7 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # SALVAR ENSAIO
+    # SALVAR
     # ========================================================
 
     def save_experiment(self):
@@ -3519,17 +3735,17 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # CONTROLE DOS BOTÕES
+    # CONTROLES
     # ========================================================
 
     def _update_controls(self):
 
-        state = (
-            self.experiment.state
-        )
+        state = self.experiment.state
 
-        busy = (
+        acquisition_busy = (
             self.measurement_in_progress
+            or
+            self.measurement_waiting_for_monitor
         )
 
         # ====================================================
@@ -3539,10 +3755,11 @@ class MainWindow(QMainWindow):
         self.measure_button.setEnabled(
             (
                 state
-                == TLExperimentState.READY
+                ==
+                TLExperimentState.READY
             )
             and
-            not busy
+            not acquisition_busy
         )
 
         # ====================================================
@@ -3550,7 +3767,7 @@ class MainWindow(QMainWindow):
         # ====================================================
 
         self.cancel_button.setEnabled(
-            busy
+            acquisition_busy
         )
 
         # ====================================================
@@ -3560,10 +3777,11 @@ class MainWindow(QMainWindow):
         self.repeat_button.setEnabled(
             (
                 state
-                == TLExperimentState.AWAITING_REVIEW
+                ==
+                TLExperimentState.AWAITING_REVIEW
             )
             and
-            not busy
+            not acquisition_busy
         )
 
         # ====================================================
@@ -3573,10 +3791,11 @@ class MainWindow(QMainWindow):
         self.accept_button.setEnabled(
             (
                 state
-                == TLExperimentState.AWAITING_REVIEW
+                ==
+                TLExperimentState.AWAITING_REVIEW
             )
             and
-            not busy
+            not acquisition_busy
         )
 
         # ====================================================
@@ -3586,10 +3805,11 @@ class MainWindow(QMainWindow):
         self.accept_warning_button.setEnabled(
             (
                 state
-                == TLExperimentState.AWAITING_REVIEW
+                ==
+                TLExperimentState.AWAITING_REVIEW
             )
             and
-            not busy
+            not acquisition_busy
             and
             self.last_measurement is not None
             and
@@ -3601,7 +3821,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # TROCA DE CARGA
+        # CARGA
         # ====================================================
 
         self.confirm_load_button.setEnabled(
@@ -3611,7 +3831,7 @@ class MainWindow(QMainWindow):
                 TLExperimentState.WAITING_LOAD_CHANGE
             )
             and
-            not busy
+            not acquisition_busy
         )
 
         # ====================================================
@@ -3625,7 +3845,7 @@ class MainWindow(QMainWindow):
                 TLExperimentState.READY_TO_PROCESS
             )
             and
-            not busy
+            not acquisition_busy
         )
 
         # ====================================================
@@ -3637,11 +3857,11 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # RESET
+        # REINICIAR
         # ====================================================
 
         self.restart_button.setEnabled(
-            not busy
+            not acquisition_busy
         )
 
         # ====================================================
@@ -3649,15 +3869,15 @@ class MainWindow(QMainWindow):
         # ====================================================
 
         self.apply_config_button.setEnabled(
-            not busy
+            not acquisition_busy
         )
 
         self.refresh_daq_button.setEnabled(
-            not busy
+            not acquisition_busy
         )
 
     # ========================================================
-    # FECHAR O PROGRAMA
+    # FECHAMENTO
     # ========================================================
 
     def closeEvent(
@@ -3666,7 +3886,31 @@ class MainWindow(QMainWindow):
     ):
 
         # ====================================================
-        # CANCELA MEDIÇÃO
+        # IMPEDE NOVOS INÍCIOS
+        # ====================================================
+
+        self.measurement_waiting_for_monitor = False
+
+        # ====================================================
+        # MONITOR
+        # ====================================================
+
+        if self.monitoring_worker is not None:
+
+            self.monitoring_worker.request_stop()
+
+        if (
+            self.monitoring_thread is not None
+            and
+            self.monitoring_thread.isRunning()
+        ):
+
+            self.monitoring_thread.wait(
+                5000
+            )
+
+        # ====================================================
+        # MEDIÇÃO OFICIAL
         # ====================================================
 
         if self.measurement_in_progress:
@@ -3674,18 +3918,19 @@ class MainWindow(QMainWindow):
             self.controller.cancel()
 
             if (
-                self.measurement_thread
-                is not None
+                self.measurement_thread is not None
+                and
+                self.measurement_thread.isRunning()
             ):
 
                 self.measurement_thread.quit()
 
                 self.measurement_thread.wait(
-                    3000
+                    5000
                 )
 
         # ====================================================
-        # FECHA POP-UPS
+        # POP-UPS
         # ====================================================
 
         if self.time_popup is not None:
@@ -3701,7 +3946,7 @@ class MainWindow(QMainWindow):
             self.coherence_popup.close()
 
         # ====================================================
-        # DESCONECTA DAQ
+        # DAQ
         # ====================================================
 
         try:
