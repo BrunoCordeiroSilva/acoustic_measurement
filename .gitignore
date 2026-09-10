@@ -1,1 +1,4 @@
 /testes
+/.venv
+/results
+/.vscode

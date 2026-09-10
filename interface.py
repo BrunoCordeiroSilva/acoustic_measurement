@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QFileDialog,
     QSizePolicy,
+    QDialog,
 )
 
 from config import (
@@ -67,12 +68,113 @@ from exporter import (
 
 
 # ============================================================
-# CORES
+# CORES PADRÃO
 # ============================================================
 
 REFERENCE_COLOR = "#00C853"
 MOBILE_COLOR = "#2979FF"
 COHERENCE_COLOR = "#FFB300"
+
+
+# ============================================================
+# POP-UP GENÉRICO DE GRÁFICO
+# ============================================================
+
+class PlotPopup(QDialog):
+
+    def __init__(
+        self,
+        title: str,
+        parent=None,
+    ):
+
+        super().__init__(
+            parent
+        )
+
+        self.setWindowTitle(
+            title
+        )
+
+        self.resize(
+            1100,
+            750,
+        )
+
+        layout = QVBoxLayout(
+            self
+        )
+
+        layout.setContentsMargins(
+            6,
+            6,
+            6,
+            6,
+        )
+
+        layout.setSpacing(
+            5
+        )
+
+        # ====================================================
+        # GRÁFICO
+        # ====================================================
+
+        self.plot = pg.PlotWidget()
+
+        self.plot.showGrid(
+            x=True,
+            y=True,
+        )
+
+        layout.addWidget(
+            self.plot,
+            stretch=1,
+        )
+
+        # ====================================================
+        # BOTÕES
+        # ====================================================
+
+        button_layout = QHBoxLayout()
+
+        button_layout.addStretch()
+
+        self.fit_button = QPushButton(
+            "Zoom to Fit"
+        )
+
+        self.close_button = QPushButton(
+            "Fechar"
+        )
+
+        self.fit_button.clicked.connect(
+            self.fit
+        )
+
+        self.close_button.clicked.connect(
+            self.close
+        )
+
+        button_layout.addWidget(
+            self.fit_button
+        )
+
+        button_layout.addWidget(
+            self.close_button
+        )
+
+        layout.addLayout(
+            button_layout
+        )
+
+    # ========================================================
+    # FIT
+    # ========================================================
+
+    def fit(self):
+
+        self.plot.getViewBox().autoRange()
 
 
 # ============================================================
@@ -86,7 +188,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         # ====================================================
-        # NÚCLEO
+        # CONFIGURAÇÃO E HARDWARE
         # ====================================================
 
         self.config = AppConfig()
@@ -112,7 +214,7 @@ class MainWindow(QMainWindow):
         self.tl_result = None
 
         # ====================================================
-        # THREAD DA MEDIÇÃO
+        # THREAD DA MEDIÇÃO OFICIAL
         # ====================================================
 
         self.measurement_thread = None
@@ -120,6 +222,16 @@ class MainWindow(QMainWindow):
         self.measurement_worker = None
 
         self.measurement_in_progress = False
+
+        # ====================================================
+        # POP-UPS
+        # ====================================================
+
+        self.time_popup = None
+
+        self.spectrum_popup = None
+
+        self.coherence_popup = None
 
         # ====================================================
         # JANELA
@@ -596,7 +708,9 @@ class MainWindow(QMainWindow):
             " Hz"
         )
 
-        self.num_samples_input = QSpinBox()
+        self.num_samples_input = (
+            QSpinBox()
+        )
 
         self.num_samples_input.setRange(
             128,
@@ -609,7 +723,9 @@ class MainWindow(QMainWindow):
             .num_samples
         )
 
-        self.num_averages_input = QSpinBox()
+        self.num_averages_input = (
+            QSpinBox()
+        )
 
         self.num_averages_input.setRange(
             1,
@@ -730,7 +846,9 @@ class MainWindow(QMainWindow):
             QLineEdit()
         )
 
-        self.notes_input = QTextEdit()
+        self.notes_input = (
+            QTextEdit()
+        )
 
         self.notes_input.setMaximumHeight(
             90
@@ -763,7 +881,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # GRID → ABA
+        # GRID NA ABA
         # ====================================================
 
         main_layout.addLayout(
@@ -814,7 +932,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # APLICAR
+        # APLICAR CONFIGURAÇÃO
         # ====================================================
 
         self.apply_config_button = QPushButton(
@@ -835,7 +953,7 @@ class MainWindow(QMainWindow):
         main_layout.addStretch()
 
         # ====================================================
-        # SIGNALS
+        # SINAIS
         # ====================================================
 
         self.sample_rate_input.valueChanged.connect(
@@ -862,6 +980,10 @@ class MainWindow(QMainWindow):
             self._update_valid_range_preview
         )
 
+        # ====================================================
+        # LABELS INICIAIS
+        # ====================================================
+
         self._update_acquisition_labels()
 
         self._update_acoustic_labels()
@@ -869,7 +991,7 @@ class MainWindow(QMainWindow):
         self._update_valid_range_preview()
 
     # ========================================================
-    # PAINEL COMPACTO DE GRÁFICO
+    # PAINEL DE GRÁFICO
     # ========================================================
 
     def _create_plot_panel(
@@ -877,6 +999,7 @@ class MainWindow(QMainWindow):
         title: str,
         plot_widget: pg.PlotWidget,
         fit_callback,
+        popup_callback=None,
     ) -> QWidget:
 
         panel = QWidget()
@@ -896,9 +1019,9 @@ class MainWindow(QMainWindow):
             2
         )
 
-        # ----------------------------------------------------
+        # ====================================================
         # CABEÇALHO
-        # ----------------------------------------------------
+        # ====================================================
 
         header = QHBoxLayout()
 
@@ -907,6 +1030,10 @@ class MainWindow(QMainWindow):
             0,
             3,
             0,
+        )
+
+        header.setSpacing(
+            4
         )
 
         title_label = QLabel(
@@ -922,13 +1049,26 @@ class MainWindow(QMainWindow):
             """
         )
 
-        fit_button = QPushButton(
-            "Fit"
+        header.addWidget(
+            title_label
         )
 
-        fit_button.setFixedSize(
-            45,
-            24,
+        header.addStretch()
+
+        # ====================================================
+        # FIT
+        # ====================================================
+
+        fit_button = QPushButton(
+            "Zoom to Fit"
+        )
+
+        fit_button.setFixedHeight(
+            24
+        )
+
+        fit_button.setMaximumWidth(
+            50
         )
 
         fit_button.clicked.connect(
@@ -936,22 +1076,42 @@ class MainWindow(QMainWindow):
         )
 
         header.addWidget(
-            title_label
-        )
-
-        header.addStretch()
-
-        header.addWidget(
             fit_button
         )
+
+        # ====================================================
+        # POP-UP
+        # ====================================================
+
+        if popup_callback is not None:
+
+            popup_button = QPushButton(
+                "Expandir"
+            )
+
+            popup_button.setFixedHeight(
+                24
+            )
+
+            popup_button.setMaximumWidth(
+                75
+            )
+
+            popup_button.clicked.connect(
+                popup_callback
+            )
+
+            header.addWidget(
+                popup_button
+            )
 
         layout.addLayout(
             header
         )
 
-        # ----------------------------------------------------
+        # ====================================================
         # GRÁFICO
-        # ----------------------------------------------------
+        # ====================================================
 
         plot_widget.setSizePolicy(
             QSizePolicy.Expanding,
@@ -983,7 +1143,7 @@ class MainWindow(QMainWindow):
         )
 
         main_layout.setSpacing(
-            4
+            5
         )
 
         # ====================================================
@@ -997,7 +1157,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # QUALIDADE
+        # QUALIDADE DA ÚLTIMA MEDIÇÃO
         # ====================================================
 
         quality_group = QGroupBox(
@@ -1201,77 +1361,31 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # GRÁFICO TEMPORAL
+        # BOTÃO SINAL TEMPORAL
         # ====================================================
 
-        self.time_plot = pg.PlotWidget()
+        time_button_layout = QHBoxLayout()
 
-        self.time_plot.setLabel(
-            "left",
-            "Pressão",
-            units="Pa",
+        time_button_layout.addStretch()
+
+        self.open_time_button = QPushButton(
+            "Abrir sinal temporal"
         )
 
-        self.time_plot.setLabel(
-            "bottom",
-            "Tempo",
-            units="s",
+        self.open_time_button.clicked.connect(
+            self.open_time_popup
         )
 
-        self.time_plot.showGrid(
-            x=True,
-            y=True,
+        time_button_layout.addWidget(
+            self.open_time_button
         )
 
-        self.time_legend = (
-            self.time_plot.addLegend()
-        )
-
-        self.time_legend.anchor(
-            itemPos=(0, 1),
-            parentPos=(0, 1),
-            offset=(10, -10),
-        )
-
-        self.time_reference_curve = (
-            self.time_plot.plot(
-                [],
-                [],
-                name="Referência - P3",
-                pen=pg.mkPen(
-                    REFERENCE_COLOR,
-                    width=2,
-                ),
-            )
-        )
-
-        self.time_mobile_curve = (
-            self.time_plot.plot(
-                [],
-                [],
-                name="Móvel",
-                pen=pg.mkPen(
-                    MOBILE_COLOR,
-                    width=2,
-                ),
-            )
-        )
-
-        time_panel = (
-            self._create_plot_panel(
-                "Sinal temporal",
-                self.time_plot,
-                self.fit_time_plot,
-            )
-        )
-
-        main_layout.addWidget(
-            time_panel,
-            stretch=1,
+        main_layout.addLayout(
+            time_button_layout
         )
 
         # ====================================================
-        # GRÁFICO ESPECTRO
+        # ESPECTRO
         # ====================================================
 
         self.spectrum_plot = (
@@ -1294,6 +1408,10 @@ class MainWindow(QMainWindow):
             y=True,
         )
 
+        # ----------------------------------------------------
+        # LEGENDA
+        # ----------------------------------------------------
+
         self.spectrum_legend = (
             self.spectrum_plot.addLegend()
         )
@@ -1303,6 +1421,10 @@ class MainWindow(QMainWindow):
             parentPos=(0, 1),
             offset=(10, -10),
         )
+
+        # ----------------------------------------------------
+        # CURVAS
+        # ----------------------------------------------------
 
         self.spectrum_reference_curve = (
             self.spectrum_plot.plot(
@@ -1330,9 +1452,16 @@ class MainWindow(QMainWindow):
 
         spectrum_panel = (
             self._create_plot_panel(
-                "Espectro",
-                self.spectrum_plot,
-                self.fit_spectrum_plot,
+                title="Espectro",
+                plot_widget=(
+                    self.spectrum_plot
+                ),
+                fit_callback=(
+                    self.fit_spectrum_plot
+                ),
+                popup_callback=(
+                    self.open_spectrum_popup
+                ),
             )
         )
 
@@ -1342,7 +1471,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # GRÁFICO COERÊNCIA
+        # COERÊNCIA
         # ====================================================
 
         self.coherence_plot = (
@@ -1383,9 +1512,16 @@ class MainWindow(QMainWindow):
 
         coherence_panel = (
             self._create_plot_panel(
-                "Coerência",
-                self.coherence_plot,
-                self.fit_coherence_plot,
+                title="Coerência",
+                plot_widget=(
+                    self.coherence_plot
+                ),
+                fit_callback=(
+                    self.fit_coherence_plot
+                ),
+                popup_callback=(
+                    self.open_coherence_popup
+                ),
             )
         )
 
@@ -1395,7 +1531,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # BOTÕES
+        # BOTÕES DO ENSAIO
         # ====================================================
 
         buttons_layout = QHBoxLayout()
@@ -1483,7 +1619,7 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # SIGNALS
+        # CONEXÕES
         # ====================================================
 
         self.start_experiment_button.clicked.connect(
@@ -1528,6 +1664,10 @@ class MainWindow(QMainWindow):
             self.results_tab
         )
 
+        # ====================================================
+        # GRÁFICO TL
+        # ====================================================
+
         self.tl_plot = pg.PlotWidget()
 
         self.tl_plot.setLabel(
@@ -1551,6 +1691,10 @@ class MainWindow(QMainWindow):
             self.tl_plot,
             stretch=1,
         )
+
+        # ====================================================
+        # RESULTADO
+        # ====================================================
 
         result_group = QGroupBox(
             "Resultado"
@@ -1581,6 +1725,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(
             result_group
         )
+
+        # ====================================================
+        # BOTÕES
+        # ====================================================
 
         buttons_layout = QHBoxLayout()
 
@@ -1613,7 +1761,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # STATUS VISUAL
+    # BANNER DE STATUS
     # ========================================================
 
     def _set_status_banner(
@@ -1692,6 +1840,297 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
+    # POP-UP DO SINAL TEMPORAL
+    # ========================================================
+
+    def open_time_popup(self):
+
+        if (
+            self.time_popup is not None
+            and
+            self.time_popup.isVisible()
+        ):
+
+            self.time_popup.raise_()
+
+            self.time_popup.activateWindow()
+
+            return
+
+        popup = PlotPopup(
+            "Sinal temporal",
+            self,
+        )
+
+        popup.plot.setLabel(
+            "left",
+            "Pressão",
+            units="Pa",
+        )
+
+        popup.plot.setLabel(
+            "bottom",
+            "Tempo",
+            units="s",
+        )
+
+        # ----------------------------------------------------
+        # LEGENDA
+        # ----------------------------------------------------
+
+        popup.legend = (
+            popup.plot.addLegend()
+        )
+
+        popup.legend.anchor(
+            itemPos=(0, 1),
+            parentPos=(0, 1),
+            offset=(10, -10),
+        )
+
+        # ----------------------------------------------------
+        # CURVAS
+        # ----------------------------------------------------
+
+        popup.reference_curve = (
+            popup.plot.plot(
+                [],
+                [],
+                name="Referência - P3",
+                pen=pg.mkPen(
+                    REFERENCE_COLOR,
+                    width=2,
+                ),
+            )
+        )
+
+        popup.mobile_curve = (
+            popup.plot.plot(
+                [],
+                [],
+                name="Móvel",
+                pen=pg.mkPen(
+                    MOBILE_COLOR,
+                    width=2,
+                ),
+            )
+        )
+
+        self.time_popup = popup
+
+        popup.finished.connect(
+            self._time_popup_closed
+        )
+
+        popup.show()
+
+    # ========================================================
+
+    def _time_popup_closed(self):
+
+        self.time_popup = None
+
+    # ========================================================
+    # POP-UP DO ESPECTRO
+    # ========================================================
+
+    def open_spectrum_popup(self):
+
+        if (
+            self.spectrum_popup is not None
+            and
+            self.spectrum_popup.isVisible()
+        ):
+
+            self.spectrum_popup.raise_()
+
+            self.spectrum_popup.activateWindow()
+
+            return
+
+        popup = PlotPopup(
+            "Espectro",
+            self,
+        )
+
+        popup.plot.setLabel(
+            "left",
+            "Amplitude",
+        )
+
+        popup.plot.setLabel(
+            "bottom",
+            "Frequência",
+            units="Hz",
+        )
+
+        # ----------------------------------------------------
+        # LEGENDA
+        # ----------------------------------------------------
+
+        popup.legend = (
+            popup.plot.addLegend()
+        )
+
+        popup.legend.anchor(
+            itemPos=(0, 1),
+            parentPos=(0, 1),
+            offset=(10, -10),
+        )
+
+        # ----------------------------------------------------
+        # CURVAS
+        # ----------------------------------------------------
+
+        popup.reference_curve = (
+            popup.plot.plot(
+                [],
+                [],
+                name="Referência - P3",
+                pen=pg.mkPen(
+                    REFERENCE_COLOR,
+                    width=2,
+                ),
+            )
+        )
+
+        popup.mobile_curve = (
+            popup.plot.plot(
+                [],
+                [],
+                name="Móvel",
+                pen=pg.mkPen(
+                    MOBILE_COLOR,
+                    width=2,
+                ),
+            )
+        )
+
+        # ----------------------------------------------------
+        # COPIA ÚLTIMA MEDIÇÃO
+        # ----------------------------------------------------
+
+        if self.last_measurement is not None:
+
+            result = (
+                self.last_measurement
+            )
+
+            reference_spectrum = np.sqrt(
+                np.maximum(
+                    result.frf.Gxx,
+                    0.0,
+                )
+            )
+
+            mobile_spectrum = np.sqrt(
+                np.maximum(
+                    result.frf.Gyy,
+                    0.0,
+                )
+            )
+
+            popup.reference_curve.setData(
+                result.frf.frequency,
+                reference_spectrum,
+            )
+
+            popup.mobile_curve.setData(
+                result.frf.frequency,
+                mobile_spectrum,
+            )
+
+        self.spectrum_popup = popup
+
+        popup.finished.connect(
+            self._spectrum_popup_closed
+        )
+
+        popup.show()
+
+    # ========================================================
+
+    def _spectrum_popup_closed(self):
+
+        self.spectrum_popup = None
+
+    # ========================================================
+    # POP-UP DA COERÊNCIA
+    # ========================================================
+
+    def open_coherence_popup(self):
+
+        if (
+            self.coherence_popup is not None
+            and
+            self.coherence_popup.isVisible()
+        ):
+
+            self.coherence_popup.raise_()
+
+            self.coherence_popup.activateWindow()
+
+            return
+
+        popup = PlotPopup(
+            "Coerência",
+            self,
+        )
+
+        popup.plot.setLabel(
+            "left",
+            "Coerência",
+        )
+
+        popup.plot.setLabel(
+            "bottom",
+            "Frequência",
+            units="Hz",
+        )
+
+        popup.plot.setYRange(
+            0.0,
+            1.05,
+        )
+
+        popup.coherence_curve = (
+            popup.plot.plot(
+                [],
+                [],
+                pen=pg.mkPen(
+                    COHERENCE_COLOR,
+                    width=2,
+                ),
+            )
+        )
+
+        if self.last_measurement is not None:
+
+            popup.coherence_curve.setData(
+                self.last_measurement
+                .frf
+                .frequency,
+
+                self.last_measurement
+                .frf
+                .coherence,
+            )
+
+        self.coherence_popup = popup
+
+        popup.finished.connect(
+            self._coherence_popup_closed
+        )
+
+        popup.show()
+
+    # ========================================================
+
+    def _coherence_popup_closed(self):
+
+        self.coherence_popup = None
+
+    # ========================================================
     # DIRETÓRIO DE SALVAMENTO
     # ========================================================
 
@@ -1711,7 +2150,7 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # DAQ
+    # DETECÇÃO DA DAQ
     # ========================================================
 
     def refresh_devices(self):
@@ -1832,7 +2271,8 @@ class MainWindow(QMainWindow):
         c = (
             331.3
             +
-            0.606 * temperature
+            0.606
+            * temperature
         )
 
         self.sound_speed_label.setText(
@@ -1842,7 +2282,7 @@ class MainWindow(QMainWindow):
         self._update_valid_range_preview()
 
     # ========================================================
-    # PREVIEW FAIXA VÁLIDA
+    # PREVIEW DA FAIXA VÁLIDA
     # ========================================================
 
     def _update_valid_range_preview(self):
@@ -1856,7 +2296,8 @@ class MainWindow(QMainWindow):
             c = (
                 331.3
                 +
-                0.606 * temperature
+                0.606
+                * temperature
             )
 
             diameter = (
@@ -2020,7 +2461,7 @@ class MainWindow(QMainWindow):
             )
 
             # ------------------------------------------------
-            # CANAIS
+            # MICROFONES
             # ------------------------------------------------
 
             self.config.channels = [
@@ -2089,6 +2530,10 @@ class MainWindow(QMainWindow):
                 .text()
                 .strip()
             )
+
+            # ------------------------------------------------
+            # VALIDAÇÃO
+            # ------------------------------------------------
 
             self.config.validate()
 
@@ -2161,7 +2606,7 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # MEDIÇÃO
+    # MEDIÇÃO COM QTHREAD
     # ========================================================
 
     def measure_current_step(self):
@@ -2191,6 +2636,10 @@ class MainWindow(QMainWindow):
             "running",
         )
 
+        # ====================================================
+        # THREAD
+        # ====================================================
+
         self.measurement_thread = (
             QThread(self)
         )
@@ -2205,9 +2654,17 @@ class MainWindow(QMainWindow):
             self.measurement_thread
         )
 
+        # ====================================================
+        # START
+        # ====================================================
+
         self.measurement_thread.started.connect(
             self.measurement_worker.run
         )
+
+        # ====================================================
+        # WORKER → GUI
+        # ====================================================
 
         self.measurement_worker.progress.connect(
             self._measurement_progress
@@ -2228,6 +2685,10 @@ class MainWindow(QMainWindow):
         self.measurement_worker.cancelled.connect(
             self._measurement_cancelled
         )
+
+        # ====================================================
+        # ENCERRAMENTO
+        # ====================================================
 
         self.measurement_worker.done.connect(
             self.measurement_thread.quit
@@ -2280,7 +2741,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # MENSAGEM
+    # MENSAGEM DO WORKER
     # ========================================================
 
     def _measurement_message(
@@ -2307,9 +2768,7 @@ class MainWindow(QMainWindow):
         result,
     ):
 
-        self.last_measurement = (
-            result
-        )
+        self.last_measurement = result
 
         self._show_measurement_result(
             result
@@ -2334,7 +2793,7 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # ERRO
+    # ERRO DE MEDIÇÃO
     # ========================================================
 
     def _measurement_error(
@@ -2354,7 +2813,7 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # CANCELADA
+    # MEDIÇÃO CANCELADA
     # ========================================================
 
     def _measurement_cancelled(self):
@@ -2400,7 +2859,7 @@ class MainWindow(QMainWindow):
         self.controller.cancel()
 
     # ========================================================
-    # RESULTADO DA ÚLTIMA MEDIÇÃO
+    # MOSTRAR RESULTADO DA MEDIÇÃO
     # ========================================================
 
     def _show_measurement_result(
@@ -2411,6 +2870,10 @@ class MainWindow(QMainWindow):
         quality = (
             result.quality
         )
+
+        # ====================================================
+        # QUALIDADE
+        # ====================================================
 
         self.quality_status_label.setText(
             quality.status.value
@@ -2434,9 +2897,9 @@ class MainWindow(QMainWindow):
             else "NÃO"
         )
 
-        # ----------------------------------------------------
-        # ESPECTRO PROVISÓRIO
-        # ----------------------------------------------------
+        # ====================================================
+        # ESPECTRO
+        # ====================================================
 
         reference_spectrum = np.sqrt(
             np.maximum(
@@ -2462,26 +2925,59 @@ class MainWindow(QMainWindow):
             mobile_spectrum,
         )
 
-        # ----------------------------------------------------
+        # ====================================================
         # COERÊNCIA
-        # ----------------------------------------------------
+        # ====================================================
 
         self.coherence_curve.setData(
             result.frf.frequency,
             result.frf.coherence,
         )
 
-    # ========================================================
-    # FIT
-    # ========================================================
+        # ====================================================
+        # POP-UP ESPECTRO
+        # ====================================================
 
-    def fit_time_plot(self):
+        if (
+            self.spectrum_popup is not None
+            and
+            self.spectrum_popup.isVisible()
+        ):
 
-        self.time_plot.getViewBox().autoRange()
+            self.spectrum_popup.reference_curve.setData(
+                result.frf.frequency,
+                reference_spectrum,
+            )
+
+            self.spectrum_popup.mobile_curve.setData(
+                result.frf.frequency,
+                mobile_spectrum,
+            )
+
+        # ====================================================
+        # POP-UP COERÊNCIA
+        # ====================================================
+
+        if (
+            self.coherence_popup is not None
+            and
+            self.coherence_popup.isVisible()
+        ):
+
+            self.coherence_popup.coherence_curve.setData(
+                result.frf.frequency,
+                result.frf.coherence,
+            )
+
+    # ========================================================
+    # FIT DOS GRÁFICOS PRINCIPAIS
+    # ========================================================
 
     def fit_spectrum_plot(self):
 
         self.spectrum_plot.getViewBox().autoRange()
+
+    # --------------------------------------------------------
 
     def fit_coherence_plot(self):
 
@@ -2617,7 +3113,7 @@ class MainWindow(QMainWindow):
         self._update_controls()
 
     # ========================================================
-    # TROCA DE CARGA
+    # CONFIRMAR TROCA DE CARGA
     # ========================================================
 
     def confirm_load_change(self):
@@ -2678,6 +3174,10 @@ class MainWindow(QMainWindow):
 
             return
 
+        # ====================================================
+        # RESET
+        # ====================================================
+
         self.experiment.reset()
 
         self.last_measurement = None
@@ -2687,6 +3187,10 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(
             0
         )
+
+        # ====================================================
+        # QUALIDADE
+        # ====================================================
 
         self.quality_status_label.setText(
             "-"
@@ -2708,6 +3212,10 @@ class MainWindow(QMainWindow):
             "-"
         )
 
+        # ====================================================
+        # GRÁFICOS PRINCIPAIS
+        # ====================================================
+
         self.coherence_curve.setData(
             [],
             [],
@@ -2723,15 +3231,64 @@ class MainWindow(QMainWindow):
             [],
         )
 
-        self.time_reference_curve.setData(
-            [],
-            [],
-        )
+        # ====================================================
+        # POP-UP TEMPORAL
+        # ====================================================
 
-        self.time_mobile_curve.setData(
-            [],
-            [],
-        )
+        if (
+            self.time_popup is not None
+            and
+            self.time_popup.isVisible()
+        ):
+
+            self.time_popup.reference_curve.setData(
+                [],
+                [],
+            )
+
+            self.time_popup.mobile_curve.setData(
+                [],
+                [],
+            )
+
+        # ====================================================
+        # POP-UP ESPECTRO
+        # ====================================================
+
+        if (
+            self.spectrum_popup is not None
+            and
+            self.spectrum_popup.isVisible()
+        ):
+
+            self.spectrum_popup.reference_curve.setData(
+                [],
+                [],
+            )
+
+            self.spectrum_popup.mobile_curve.setData(
+                [],
+                [],
+            )
+
+        # ====================================================
+        # POP-UP COERÊNCIA
+        # ====================================================
+
+        if (
+            self.coherence_popup is not None
+            and
+            self.coherence_popup.isVisible()
+        ):
+
+            self.coherence_popup.coherence_curve.setData(
+                [],
+                [],
+            )
+
+        # ====================================================
+        # TL
+        # ====================================================
 
         self.tl_plot.clear()
 
@@ -2769,6 +3326,10 @@ class MainWindow(QMainWindow):
                 result.valid_mask
             )
 
+            # =================================================
+            # PONTOS VÁLIDOS
+            # =================================================
+
             if np.any(
                 valid_mask
             ):
@@ -2784,6 +3345,10 @@ class MainWindow(QMainWindow):
                         valid_mask
                     ]
                 )
+
+            # =================================================
+            # DIAGNÓSTICO
+            # =================================================
 
             else:
 
@@ -2827,6 +3392,10 @@ class MainWindow(QMainWindow):
                     "A curva calculada será exibida "
                     "apenas para diagnóstico.",
                 )
+
+            # =================================================
+            # PLOT
+            # =================================================
 
             self.tl_plot.plot(
                 frequency_plot,
@@ -2872,7 +3441,7 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # SALVAR
+    # SALVAR ENSAIO
     # ========================================================
 
     def save_experiment(self):
@@ -2950,7 +3519,7 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
-    # CONTROLES
+    # CONTROLE DOS BOTÕES
     # ========================================================
 
     def _update_controls(self):
@@ -2963,6 +3532,10 @@ class MainWindow(QMainWindow):
             self.measurement_in_progress
         )
 
+        # ====================================================
+        # MEDIR
+        # ====================================================
+
         self.measure_button.setEnabled(
             (
                 state
@@ -2972,9 +3545,17 @@ class MainWindow(QMainWindow):
             not busy
         )
 
+        # ====================================================
+        # CANCELAR
+        # ====================================================
+
         self.cancel_button.setEnabled(
             busy
         )
+
+        # ====================================================
+        # REPETIR
+        # ====================================================
 
         self.repeat_button.setEnabled(
             (
@@ -2985,6 +3566,10 @@ class MainWindow(QMainWindow):
             not busy
         )
 
+        # ====================================================
+        # ACEITAR
+        # ====================================================
+
         self.accept_button.setEnabled(
             (
                 state
@@ -2993,6 +3578,10 @@ class MainWindow(QMainWindow):
             and
             not busy
         )
+
+        # ====================================================
+        # ACEITAR COM AVISO
+        # ====================================================
 
         self.accept_warning_button.setEnabled(
             (
@@ -3011,6 +3600,10 @@ class MainWindow(QMainWindow):
             MeasurementQualityStatus.REVIEW
         )
 
+        # ====================================================
+        # TROCA DE CARGA
+        # ====================================================
+
         self.confirm_load_button.setEnabled(
             (
                 state
@@ -3020,6 +3613,10 @@ class MainWindow(QMainWindow):
             and
             not busy
         )
+
+        # ====================================================
+        # PROCESSAR
+        # ====================================================
 
         self.process_button.setEnabled(
             (
@@ -3031,13 +3628,25 @@ class MainWindow(QMainWindow):
             not busy
         )
 
+        # ====================================================
+        # SALVAR
+        # ====================================================
+
         self.save_button.setEnabled(
             self.tl_result is not None
         )
 
+        # ====================================================
+        # RESET
+        # ====================================================
+
         self.restart_button.setEnabled(
             not busy
         )
+
+        # ====================================================
+        # CONFIGURAÇÃO
+        # ====================================================
 
         self.apply_config_button.setEnabled(
             not busy
@@ -3048,13 +3657,17 @@ class MainWindow(QMainWindow):
         )
 
     # ========================================================
-    # FECHAMENTO
+    # FECHAR O PROGRAMA
     # ========================================================
 
     def closeEvent(
         self,
         event,
     ):
+
+        # ====================================================
+        # CANCELA MEDIÇÃO
+        # ====================================================
 
         if self.measurement_in_progress:
 
@@ -3070,6 +3683,26 @@ class MainWindow(QMainWindow):
                 self.measurement_thread.wait(
                     3000
                 )
+
+        # ====================================================
+        # FECHA POP-UPS
+        # ====================================================
+
+        if self.time_popup is not None:
+
+            self.time_popup.close()
+
+        if self.spectrum_popup is not None:
+
+            self.spectrum_popup.close()
+
+        if self.coherence_popup is not None:
+
+            self.coherence_popup.close()
+
+        # ====================================================
+        # DESCONECTA DAQ
+        # ====================================================
 
         try:
 
