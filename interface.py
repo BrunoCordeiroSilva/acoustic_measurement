@@ -483,6 +483,21 @@ class MainWindow(QMainWindow):
             microphone_group
         )
 
+        microphone_layout.setContentsMargins(
+            8,
+            6,
+            8,
+            6,
+        )
+
+        microphone_layout.setVerticalSpacing(
+            3
+        )
+
+        microphone_group.setMaximumHeight(
+            135
+        )
+
         self.reference_channel_combo = QComboBox()
 
         self.mobile_channel_combo = QComboBox()
@@ -767,6 +782,49 @@ class MainWindow(QMainWindow):
 
         self.nyquist_label = QLabel()
 
+        self.coherence_min_input = QDoubleSpinBox()
+
+        self.coherence_mean_input = QDoubleSpinBox()
+
+        for spinbox in (
+            self.coherence_min_input,
+            self.coherence_mean_input,
+        ):
+
+            spinbox.setRange(
+                0.0,
+                1.0,
+            )
+
+            spinbox.setDecimals(
+                3
+            )
+
+            spinbox.setSingleStep(
+                0.01
+            )
+
+        self.coherence_min_input.setValue(
+            self.config.quality.coherence_threshold
+        )
+
+        self.coherence_mean_input.setValue(
+            self.config.quality.coherence_mean_threshold
+        )
+
+        self.coherence_guidance_label = QLabel(
+            "Orientação inicial: média ≥ 0,90 e mínima ≥ 0,80. "
+            "Ajuste conforme a norma, banda e excitação usadas."
+        )
+
+        self.coherence_guidance_label.setWordWrap(
+            True
+        )
+
+        self.coherence_guidance_label.setStyleSheet(
+            "color: #666666;"
+        )
+
         acquisition_form.addRow(
             "Fs:",
             self.sample_rate_input,
@@ -805,6 +863,21 @@ class MainWindow(QMainWindow):
         acquisition_form.addRow(
             "Nyquist:",
             self.nyquist_label,
+        )
+
+        acquisition_form.addRow(
+            "Coerência mínima aceita:",
+            self.coherence_min_input,
+        )
+
+        acquisition_form.addRow(
+            "Coerência média aceita:",
+            self.coherence_mean_input,
+        )
+
+        acquisition_form.addRow(
+            "Recomendação:",
+            self.coherence_guidance_label,
         )
 
         config_grid.addWidget(
@@ -1641,12 +1714,30 @@ class MainWindow(QMainWindow):
             "Salvar ensaio"
         )
 
+        self.fit_tl_button = QPushButton(
+            "Zoom-to-fit"
+        )
+
+        self.new_model_button = QPushButton(
+            "Novo ensaio / modelo"
+        )
+
         buttons_layout.addWidget(
             self.process_button
         )
 
         buttons_layout.addWidget(
             self.save_button
+        )
+
+        buttons_layout.addWidget(
+            self.fit_tl_button
+        )
+
+        buttons_layout.addStretch()
+
+        buttons_layout.addWidget(
+            self.new_model_button
         )
 
         layout.addLayout(
@@ -1659,6 +1750,14 @@ class MainWindow(QMainWindow):
 
         self.save_button.clicked.connect(
             self.save_experiment
+        )
+
+        self.fit_tl_button.clicked.connect(
+            self.fit_tl_plot
+        )
+
+        self.new_model_button.clicked.connect(
+            self.start_new_model_experiment
         )
 
     # ========================================================
@@ -2675,6 +2774,14 @@ class MainWindow(QMainWindow):
                 self.window_combo.currentData()
             )
 
+            self.config.quality.coherence_threshold = (
+                self.coherence_min_input.value()
+            )
+
+            self.config.quality.coherence_mean_threshold = (
+                self.coherence_mean_input.value()
+            )
+
             # =================================================
             # ACÚSTICA
             # =================================================
@@ -3113,6 +3220,10 @@ class MainWindow(QMainWindow):
             frf.coherence,
         )
 
+        self.fit_spectrum_plot()
+
+        self.fit_coherence_plot()
+
         self.coherence_frozen_to_measurement = True
 
         self.displayed_measurement_frf = frf
@@ -3132,6 +3243,8 @@ class MainWindow(QMainWindow):
                 mobile_spectrum,
             )
 
+            self.spectrum_popup.plot.getViewBox().autoRange()
+
         if (
             self.coherence_popup is not None
             and self.coherence_popup.isVisible()
@@ -3141,6 +3254,8 @@ class MainWindow(QMainWindow):
                 frf.frequency,
                 frf.coherence,
             )
+
+            self.coherence_popup.plot.getViewBox().autoRange()
 
     # ========================================================
     # MEDIÇÃO FINALIZADA
@@ -3377,6 +3492,10 @@ class MainWindow(QMainWindow):
                 result.frf.frequency,
                 result.frf.coherence,
             )
+
+        self.fit_spectrum_plot()
+
+        self.fit_coherence_plot()
 
     # ========================================================
     # FIT
@@ -3738,11 +3857,7 @@ class MainWindow(QMainWindow):
                 result.valid_frequency_range
             )
 
-            self.tl_plot.setXRange(
-                valid_range.minimum,
-                valid_range.maximum,
-                padding=0.02,
-            )
+            self.fit_tl_plot()
 
             self.result_range_label.setText(
                 f"{valid_range.minimum:.1f} - "
@@ -3768,6 +3883,14 @@ class MainWindow(QMainWindow):
                 "Erro de processamento",
                 str(error),
             )
+
+    # ========================================================
+    # ZOOM DA TL
+    # ========================================================
+
+    def fit_tl_plot(self):
+
+        self.tl_plot.getViewBox().autoRange()
 
     # ========================================================
     # SALVAR
@@ -3846,6 +3969,90 @@ class MainWindow(QMainWindow):
                 "Erro ao salvar",
                 str(error),
             )
+
+    # ========================================================
+    # NOVO MODELO
+    # ========================================================
+
+    def start_new_model_experiment(self):
+        """
+        Prepara a mesma configuração técnica para outro modelo.
+
+        A geometria, aquisição e canais permanecem nos campos de
+        configuração. O operador apenas atualiza identificação e
+        diretório, aplica a configuração e inicia a nova sequência.
+        """
+
+        if (
+            self.measurement_in_progress
+            or self.measurement_waiting_for_monitor
+        ):
+
+            QMessageBox.warning(
+                self,
+                "Novo ensaio",
+                "Aguarde o término ou cancele a medição atual.",
+            )
+
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Novo ensaio / modelo",
+            "O resultado atual será removido da interface.\n\n"
+            "Salve o ensaio atual antes de continuar, caso ainda "
+            "não o tenha salvo.\n\n"
+            "Deseja preparar uma nova sequência de TL?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+
+        if answer != QMessageBox.Yes:
+
+            return
+
+        self.experiment.reset()
+
+        self.last_measurement = None
+
+        self.displayed_measurement_frf = None
+
+        self.coherence_frozen_to_measurement = False
+
+        self.tl_result = None
+
+        self.progress_bar.setValue(0)
+
+        self.quality_status_label.setText("-")
+
+        self.coherence_mean_label.setText("-")
+
+        self.coherence_min_label.setText("-")
+
+        self.valid_points_label.setText("-")
+
+        self.clipping_label.setText("-")
+
+        self.tl_plot.clear()
+
+        self.result_range_label.setText("-")
+
+        self.result_points_label.setText("-")
+
+        self.instruction_label.setText(
+            "Atualize a identificação e o diretório, aplique a "
+            "configuração e inicie o novo ensaio."
+        )
+
+        self._set_status_banner(
+            "NOVO MODELO — CONFIGURE A IDENTIFICAÇÃO",
+            "idle",
+        )
+
+        self.tabs.setCurrentWidget(
+            self.config_tab
+        )
+
+        self._update_controls()
 
     # ========================================================
     # CONTROLES
@@ -3967,6 +4174,15 @@ class MainWindow(QMainWindow):
 
         self.save_button.setEnabled(
             self.tl_result is not None
+        )
+
+        self.fit_tl_button.setEnabled(
+            self.tl_result is not None
+        )
+
+        self.new_model_button.setEnabled(
+            self.tl_result is not None
+            and not acquisition_busy
         )
 
         # ====================================================

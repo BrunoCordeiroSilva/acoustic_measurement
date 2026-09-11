@@ -534,6 +534,9 @@ class DataExporter:
                 "coherence_threshold":
                     quality.coherence_threshold,
 
+                "coherence_mean_threshold":
+                    quality.coherence_mean_threshold,
+
                 "clipping_threshold":
                     quality.clipping_threshold,
             },

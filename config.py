@@ -228,8 +228,11 @@ class AcousticConfig:
 @dataclass
 class QualityConfig:
 
-    # Coerência mínima desejada
-    coherence_threshold: float = 0.90
+    # Coerência mínima aceitável em qualquer ponto da banda.
+    coherence_threshold: float = 0.80
+
+    # Coerência média aceitável na banda avaliada.
+    coherence_mean_threshold: float = 0.90
 
     # Percentual máximo do range permitido antes de alertar
     # sobre clipping
@@ -240,6 +243,12 @@ class QualityConfig:
         if not 0 <= self.coherence_threshold <= 1:
             raise ValueError(
                 "O limite de coerência deve estar entre 0 e 1."
+            )
+
+        if not 0 <= self.coherence_mean_threshold <= 1:
+            raise ValueError(
+                "O limite médio de coerência deve estar "
+                "entre 0 e 1."
             )
 
         if not 0 < self.clipping_threshold <= 1:

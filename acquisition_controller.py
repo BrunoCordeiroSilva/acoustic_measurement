@@ -1448,6 +1448,16 @@ class AcquisitionController:
                 "abaixo do limite configurado."
             )
 
+        if coherence_mean < (
+            quality_config
+            .coherence_mean_threshold
+        ):
+
+            warnings.append(
+                "A coerência média está abaixo do "
+                "limite configurado."
+            )
+
         # Com uma única realização, a estimativa
         # de coerência não é estatisticamente útil.
 
