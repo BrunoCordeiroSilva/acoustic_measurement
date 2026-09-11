@@ -1,6 +1,38 @@
+# Python: bytecode e caches gerados localmente
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+ENV/
+
+# Empacotamento e distribuição
+build/
+dist/
+*.egg-info/
+
+# Resultados e arquivos temporários gerados pelos ensaios
+results/
+*.log
+
+# Configuração local de IDE e sistema operacional
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Variáveis locais e segredos
+.env
+.env.*
+!.env.example
+
 /testes
-/.venv
-/results
-/.vscode
-/__pycache__
-/experiments/__pycache__

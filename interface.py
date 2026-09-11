@@ -1716,6 +1716,10 @@ class MainWindow(QMainWindow):
             260
         )
 
+        result_group.setFixedWidth(
+            260
+        )
+
         lower_layout = QGridLayout()
 
         lower_layout.setHorizontalSpacing(
@@ -1739,7 +1743,7 @@ class MainWindow(QMainWindow):
         )
 
         self.new_model_button = QPushButton(
-            "Novo ensaio / modelo"
+            "Novo Ensaio/Modelo"
         )
 
         self.import_tl_button = QPushButton(
@@ -1782,12 +1786,14 @@ class MainWindow(QMainWindow):
             self.process_button,
             0,
             1,
+            Qt.AlignLeft | Qt.AlignTop,
         )
 
         lower_layout.addWidget(
             self.save_button,
             1,
             1,
+            Qt.AlignLeft | Qt.AlignTop,
         )
 
         # Coluna 3: importação e exportação da comparação.
@@ -1795,18 +1801,21 @@ class MainWindow(QMainWindow):
             self.import_tl_button,
             0,
             2,
+            Qt.AlignLeft | Qt.AlignTop,
         )
 
         lower_layout.addWidget(
             self.save_tl_png_button,
             1,
             2,
+            Qt.AlignLeft | Qt.AlignTop,
         )
 
         lower_layout.addWidget(
             self.save_tl_csv_button,
             2,
             2,
+            Qt.AlignLeft | Qt.AlignTop,
         )
 
         self.tl_curve_visibility_group = QGroupBox(
@@ -1864,13 +1873,14 @@ class MainWindow(QMainWindow):
             self.fit_tl_button,
             0,
             4,
+            Qt.AlignRight | Qt.AlignBottom,
         )
 
-        lower_layout.setColumnStretch(0, 1)
+        lower_layout.setColumnStretch(0, 0)
 
-        lower_layout.setColumnStretch(1, 1)
+        lower_layout.setColumnStretch(1, 0)
 
-        lower_layout.setColumnStretch(2, 1)
+        lower_layout.setColumnStretch(2, 0)
 
         lower_layout.setColumnStretch(3, 0)
 
