@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from threading import Event
+from threading import Event, Lock
 
 import numpy as np
 
@@ -39,7 +39,7 @@ from experiments.transmission_loss import (
 @dataclass
 class MonitoringData:
     """
-    Pacote enviado pelo MonitoringWorker para a interface.
+    Pacote mais recente produzido pelo MonitoringWorker.
 
     O monitoramento é apenas visual e não interfere
     nas medições oficiais usadas para calcular a TL.
@@ -231,10 +231,6 @@ class MonitoringWorker(QObject):
     ser encerrado para liberar a NI-9234.
     """
 
-    data_ready = Signal(
-        object
-    )
-
     error = Signal(
         str
     )
@@ -271,6 +267,13 @@ class MonitoringWorker(QObject):
 
         self._running = False
 
+        # A GUI consulta somente o pacote mais recente por meio
+        # de um QTimer. Isso impede o acúmulo de sinais de dados
+        # quando a aquisição for mais rápida que o desenho.
+        self._latest_data_lock = Lock()
+
+        self._latest_data: MonitoringData | None = None
+
         # ========================================================
         # BUFFER TEMPORAL
         # ========================================================
@@ -303,6 +306,39 @@ class MonitoringWorker(QObject):
         """
 
         self._stop_event.set()
+
+    # ========================================================
+    # CAIXA DE CORREIO PARA A GUI
+    # ========================================================
+
+    def _publish_latest_data(
+        self,
+        data: MonitoringData,
+    ):
+
+        with self._latest_data_lock:
+
+            self._latest_data = data
+
+    # ========================================================
+
+    def take_latest_data(
+        self,
+    ) -> MonitoringData | None:
+        """
+        Entrega o pacote mais recente e descarta os anteriores.
+
+        Este método só manipula dados Python protegidos por Lock,
+        portanto pode ser chamado pela thread da interface.
+        """
+
+        with self._latest_data_lock:
+
+            data = self._latest_data
+
+            self._latest_data = None
+
+        return data
 
     # ========================================================
     # EXECUÇÃO
@@ -585,7 +621,7 @@ class MonitoringWorker(QObject):
                     sample_rate=sample_rate,
                 )
 
-                self.data_ready.emit(
+                self._publish_latest_data(
                     monitor_data
                 )
 

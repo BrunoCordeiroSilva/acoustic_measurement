@@ -9,6 +9,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import (
     Qt,
     QThread,
+    QTimer,
 )
 
 from PySide6.QtWidgets import (
@@ -249,6 +250,16 @@ class MainWindow(QMainWindow):
         self.monitoring_running = False
 
         self.monitoring_stop_requested = False
+
+        # Desenha no máximo 12,5 vezes por segundo, sempre com
+        # o pacote mais recente produzido pelo monitoramento.
+        self.monitor_update_timer = QTimer(self)
+
+        self.monitor_update_timer.setInterval(80)
+
+        self.monitor_update_timer.timeout.connect(
+            self._flush_monitoring_data
+        )
 
         # Indica que o usuário clicou em Medir
         # enquanto o monitor ainda estava ativo.
@@ -2405,10 +2416,6 @@ class MainWindow(QMainWindow):
             self._monitoring_started
         )
 
-        self.monitoring_worker.data_ready.connect(
-            self._update_monitoring_plots
-        )
-
         self.monitoring_worker.error.connect(
             self._monitoring_error
         )
@@ -2448,6 +2455,8 @@ class MainWindow(QMainWindow):
 
         self.monitoring_stop_requested = True
 
+        self.monitor_update_timer.stop()
+
         # request_stop() usa threading.Event,
         # portanto pode ser chamado daqui com segurança.
         self.monitoring_worker.request_stop()
@@ -2472,11 +2481,15 @@ class MainWindow(QMainWindow):
 
         self.monitoring_running = True
 
+        self.monitor_update_timer.start()
+
     # ========================================================
 
     def _monitoring_thread_finished(self):
 
         self.monitoring_running = False
+
+        self.monitor_update_timer.stop()
 
         self.monitoring_stop_requested = False
 
@@ -2519,6 +2532,38 @@ class MainWindow(QMainWindow):
 
     # ========================================================
     # ATUALIZAÇÃO DOS GRÁFICOS
+    # ========================================================
+
+    def _flush_monitoring_data(self):
+        """
+        Atualiza a GUI com o último pacote disponível.
+
+        A thread de aquisição nunca enfileira atualizações de
+        gráficos; pacotes intermediários são substituídos no worker.
+        """
+
+        worker = self.monitoring_worker
+
+        if worker is None:
+
+            return
+
+        try:
+
+            data = worker.take_latest_data()
+
+        except RuntimeError:
+
+            # O worker pode ter sido destruído enquanto a thread
+            # de monitoramento estava sendo encerrada.
+            return
+
+        if data is not None:
+
+            self._update_monitoring_plots(
+                data
+            )
+
     # ========================================================
 
     def _update_monitoring_plots(
@@ -4746,6 +4791,8 @@ class MainWindow(QMainWindow):
         # ====================================================
 
         self.measurement_waiting_for_monitor = False
+
+        self.monitor_update_timer.stop()
 
         # ====================================================
         # MONITOR
