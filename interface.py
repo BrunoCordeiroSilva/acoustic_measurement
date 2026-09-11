@@ -315,6 +315,14 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
 
+        # O conteúdo mais largo das demais abas não deve impor uma largura
+        # mínima à janela inteira. Isso permite que a aba de configuração
+        # se adapte à tela e use sua área de rolagem quando necessário.
+        self.tabs.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Ignored,
+        )
+
         main_layout.addWidget(
             self.tabs
         )
@@ -358,18 +366,28 @@ class MainWindow(QMainWindow):
 
     def _build_config_tab(self):
 
-        main_layout = QVBoxLayout(
-            self.config_tab
-        )
+        # Em telas menores a configuração pode exceder a área visível.
+        # A rolagem preserva os grupos e a ordem atuais, sem ocultar
+        # campos de preenchimento ou botões.
+        tab_layout = QVBoxLayout(self.config_tab)
 
-        main_layout.setContentsMargins(
-            8,
-            8,
-            8,
-            8,
-        )
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+
+        configuration_scroll = QScrollArea()
+
+        configuration_scroll.setWidgetResizable(True)
+
+        configuration_content = QWidget()
+
+        main_layout = QVBoxLayout(configuration_content)
+
+        main_layout.setContentsMargins(8, 8, 8, 8)
 
         main_layout.setSpacing(8)
+
+        configuration_scroll.setWidget(configuration_content)
+
+        tab_layout.addWidget(configuration_scroll)
 
         # ====================================================
         # GRID
@@ -391,6 +409,17 @@ class MainWindow(QMainWindow):
             1,
         )
 
+        def configure_responsive_form(form: QFormLayout) -> None:
+            """Evita que rótulos longos comprimam os campos editáveis."""
+
+            form.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+            )
+
+            form.setRowWrapPolicy(
+                QFormLayout.RowWrapPolicy.WrapLongRows
+            )
+
         # ====================================================
         # DISPOSITIVO
         # ====================================================
@@ -404,6 +433,11 @@ class MainWindow(QMainWindow):
         )
 
         self.device_combo = QComboBox()
+
+        self.device_combo.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
 
         self.refresh_daq_button = QPushButton(
             "Detectar DAQ"
@@ -431,6 +465,8 @@ class MainWindow(QMainWindow):
             2,
         )
 
+        daq_layout.setColumnStretch(1, 1)
+
         config_grid.addWidget(
             daq_group,
             0,
@@ -448,6 +484,8 @@ class MainWindow(QMainWindow):
         acoustic_form = QFormLayout(
             acoustic_group
         )
+
+        configure_responsive_form(acoustic_form)
 
         self.temperature_input = QDoubleSpinBox()
 
@@ -507,13 +545,26 @@ class MainWindow(QMainWindow):
             3
         )
 
-        microphone_group.setMaximumHeight(
-            135
+        # Não limita a altura: em telas estreitas os rótulos podem
+        # quebrar em mais de uma linha sem sobrepor os campos.
+        microphone_group.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
         )
 
         self.reference_channel_combo = QComboBox()
 
         self.mobile_channel_combo = QComboBox()
+
+        for combo in (
+            self.reference_channel_combo,
+            self.mobile_channel_combo,
+        ):
+
+            combo.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed,
+            )
 
         self.reference_sensitivity_input = (
             QDoubleSpinBox()
@@ -541,6 +592,17 @@ class MainWindow(QMainWindow):
                 " mV/Pa"
             )
 
+            spinbox.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed,
+            )
+
+        reference_microphone_label = QLabel(
+            "Referência - P3"
+        )
+
+        reference_microphone_label.setWordWrap(True)
+
         microphone_layout.addWidget(
             QLabel(""),
             0,
@@ -560,7 +622,7 @@ class MainWindow(QMainWindow):
         )
 
         microphone_layout.addWidget(
-            QLabel("Referência - P3"),
+            reference_microphone_label,
             1,
             0,
         )
@@ -595,6 +657,9 @@ class MainWindow(QMainWindow):
             2,
         )
 
+        microphone_layout.setColumnStretch(1, 1)
+        microphone_layout.setColumnStretch(2, 1)
+
         config_grid.addWidget(
             microphone_group,
             1,
@@ -612,6 +677,8 @@ class MainWindow(QMainWindow):
         geometry_form = QFormLayout(
             geometry_group
         )
+
+        configure_responsive_form(geometry_form)
 
         self.diameter_input = QDoubleSpinBox()
 
@@ -713,6 +780,8 @@ class MainWindow(QMainWindow):
         acquisition_form = QFormLayout(
             acquisition_group
         )
+
+        configure_responsive_form(acquisition_form)
 
         self.sample_rate_input = QDoubleSpinBox()
 
@@ -911,6 +980,8 @@ class MainWindow(QMainWindow):
             metadata_group
         )
 
+        configure_responsive_form(metadata_form)
+
         self.experiment_name_input = QLineEdit()
 
         self.experiment_number_input = QLineEdit()
@@ -948,6 +1019,22 @@ class MainWindow(QMainWindow):
             2,
             1,
         )
+
+        # Em largura normal, os grupos permanecem em duas colunas. Abaixo
+        # desse limite, eles passam temporariamente a uma coluna, evitando
+        # que os campos de cada grupo sejam estreitados ou cortados.
+        self.config_grid = config_grid
+
+        self.config_groups = (
+            daq_group,
+            acoustic_group,
+            microphone_group,
+            geometry_group,
+            acquisition_group,
+            metadata_group,
+        )
+
+        self.config_grid_is_compact = None
 
         main_layout.addLayout(
             config_grid
@@ -1050,6 +1137,74 @@ class MainWindow(QMainWindow):
         self._update_acoustic_labels()
 
         self._update_valid_range_preview()
+
+        self._update_config_grid_layout()
+
+        # A largura definitiva da aba só existe após o primeiro ciclo de
+        # layout da janela; então reavaliamos a disposição nesse momento.
+        QTimer.singleShot(
+            0,
+            self._update_config_grid_layout,
+        )
+
+    # ========================================================
+    # LAYOUT RESPONSIVO DA CONFIGURAÇÃO
+    # ========================================================
+
+    def _update_config_grid_layout(self) -> None:
+        """Alterna os grupos entre duas e uma coluna conforme a largura."""
+
+        if not hasattr(self, "config_grid"):
+
+            return
+
+        compact = self.config_tab.width() < 900
+
+        if compact == self.config_grid_is_compact:
+
+            return
+
+        for group in self.config_groups:
+
+            self.config_grid.removeWidget(group)
+
+        if compact:
+
+            for row, group in enumerate(self.config_groups):
+
+                self.config_grid.addWidget(
+                    group,
+                    row,
+                    0,
+                    1,
+                    2,
+                )
+
+            self.config_grid.setColumnStretch(0, 1)
+            self.config_grid.setColumnStretch(1, 0)
+
+        else:
+
+            for index, group in enumerate(self.config_groups):
+
+                self.config_grid.addWidget(
+                    group,
+                    index // 2,
+                    index % 2,
+                )
+
+            self.config_grid.setColumnStretch(0, 1)
+            self.config_grid.setColumnStretch(1, 1)
+
+        self.config_grid_is_compact = compact
+
+    # ========================================================
+
+    def resizeEvent(self, event):
+
+        super().resizeEvent(event)
+
+        self._update_config_grid_layout()
 
     # ========================================================
     # PAINEL DOS GRÁFICOS
