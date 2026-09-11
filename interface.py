@@ -218,6 +218,12 @@ class MainWindow(QMainWindow):
 
         self.last_monitoring_data = None
 
+        # Antes da primeira medição oficial, a coerência vem do
+        # monitor. Depois, ela representa a última FRF medida.
+        self.coherence_frozen_to_measurement = False
+
+        self.displayed_measurement_frf = None
+
         self.tl_result = None
 
         # ====================================================
@@ -2014,10 +2020,24 @@ class MainWindow(QMainWindow):
         )
 
         # ====================================================
-        # PRIORIDADE: MONITOR
+        # PRIORIDADE: ÚLTIMA MEDIÇÃO OFICIAL
         # ====================================================
 
-        if self.last_monitoring_data is not None:
+        if (
+            self.coherence_frozen_to_measurement
+            and self.displayed_measurement_frf is not None
+        ):
+
+            popup.coherence_curve.setData(
+                self.displayed_measurement_frf.frequency,
+                self.displayed_measurement_frf.coherence,
+            )
+
+        # ====================================================
+        # FALLBACK: MONITOR
+        # ====================================================
+
+        elif self.last_monitoring_data is not None:
 
             data = self.last_monitoring_data
 
@@ -2257,10 +2277,12 @@ class MainWindow(QMainWindow):
         # COERÊNCIA PRINCIPAL
         # ====================================================
 
-        self.coherence_curve.setData(
-            data.coherence_frequency,
-            data.coherence,
-        )
+        if not self.coherence_frozen_to_measurement:
+
+            self.coherence_curve.setData(
+                data.coherence_frequency,
+                data.coherence,
+            )
 
         # ====================================================
         # TEMPORAL
@@ -2307,6 +2329,8 @@ class MainWindow(QMainWindow):
         # ====================================================
 
         if (
+            not self.coherence_frozen_to_measurement
+            and
             self.coherence_popup is not None
             and
             self.coherence_popup.isVisible()
@@ -2812,6 +2836,10 @@ class MainWindow(QMainWindow):
 
             self.last_measurement = None
 
+            self.coherence_frozen_to_measurement = False
+
+            self.displayed_measurement_frf = None
+
             self.tl_result = None
 
             self.progress_bar.setValue(
@@ -2952,6 +2980,10 @@ class MainWindow(QMainWindow):
             self._measurement_message
         )
 
+        self.measurement_worker.frf_updated.connect(
+            self._measurement_frf_updated
+        )
+
         self.measurement_worker.finished.connect(
             self._measurement_finished
         )
@@ -3038,6 +3070,79 @@ class MainWindow(QMainWindow):
             )
 
     # ========================================================
+    # FRF PARCIAL DA MEDIÇÃO OFICIAL
+    # ========================================================
+
+    def _measurement_frf_updated(
+        self,
+        frf,
+    ):
+        """
+        Atualiza os gráficos após cada média acumulada.
+
+        O monitor é interrompido durante a medição, portanto
+        estes dados são exclusivamente da aquisição oficial.
+        """
+
+        reference_spectrum = np.sqrt(
+            np.maximum(
+                frf.Gxx,
+                0.0,
+            )
+        )
+
+        mobile_spectrum = np.sqrt(
+            np.maximum(
+                frf.Gyy,
+                0.0,
+            )
+        )
+
+        self.spectrum_reference_curve.setData(
+            frf.frequency,
+            reference_spectrum,
+        )
+
+        self.spectrum_mobile_curve.setData(
+            frf.frequency,
+            mobile_spectrum,
+        )
+
+        self.coherence_curve.setData(
+            frf.frequency,
+            frf.coherence,
+        )
+
+        self.coherence_frozen_to_measurement = True
+
+        self.displayed_measurement_frf = frf
+
+        if (
+            self.spectrum_popup is not None
+            and self.spectrum_popup.isVisible()
+        ):
+
+            self.spectrum_popup.reference_curve.setData(
+                frf.frequency,
+                reference_spectrum,
+            )
+
+            self.spectrum_popup.mobile_curve.setData(
+                frf.frequency,
+                mobile_spectrum,
+            )
+
+        if (
+            self.coherence_popup is not None
+            and self.coherence_popup.isVisible()
+        ):
+
+            self.coherence_popup.coherence_curve.setData(
+                frf.frequency,
+                frf.coherence,
+            )
+
+    # ========================================================
     # MEDIÇÃO FINALIZADA
     # ========================================================
 
@@ -3047,6 +3152,10 @@ class MainWindow(QMainWindow):
     ):
 
         self.last_measurement = result
+
+        self.coherence_frozen_to_measurement = True
+
+        self.displayed_measurement_frf = result.frf
 
         self._show_measurement_result(
             result
@@ -3481,6 +3590,10 @@ class MainWindow(QMainWindow):
         self.experiment.reset()
 
         self.last_measurement = None
+
+        self.coherence_frozen_to_measurement = False
+
+        self.displayed_measurement_frf = None
 
         self.tl_result = None
 

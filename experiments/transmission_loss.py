@@ -378,6 +378,7 @@ class TransmissionLossExperiment:
         self,
         progress_callback=None,
         message_callback=None,
+        frf_update_callback=None,
     ) -> FRFMeasurementResult:
 
         if (
@@ -402,12 +403,22 @@ class TransmissionLossExperiment:
 
         try:
 
+            acquisition_kwargs = {
+                "reference_channel_index": 0,
+                "response_channel_index": 1,
+                "progress_callback": progress_callback,
+                "message_callback": message_callback,
+            }
+
+            if frf_update_callback is not None:
+
+                acquisition_kwargs[
+                    "frf_update_callback"
+                ] = frf_update_callback
+
             result = (
                 self.controller.acquire_frf(
-                    reference_channel_index=0,
-                    response_channel_index=1,
-                    progress_callback=progress_callback,
-                    message_callback=message_callback,
+                    **acquisition_kwargs
                 )
             )
 

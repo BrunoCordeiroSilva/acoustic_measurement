@@ -168,6 +168,11 @@ MessageCallback = Callable[
     None,
 ]
 
+FRFUpdateCallback = Callable[
+    [FRFResult, int, int],
+    None,
+]
+
 
 # ============================================================
 # CONTROLLER
@@ -411,6 +416,8 @@ class AcquisitionController:
             Optional[ProgressCallback] = None,
         message_callback:
             Optional[MessageCallback] = None,
+        frf_update_callback:
+            Optional[FRFUpdateCallback] = None,
     ) -> FRFMeasurementResult:
         """
         Executa uma medição completa de FRF.
@@ -721,6 +728,34 @@ class AcquisitionController:
             )
 
             completed_averages += 1
+
+            # A interface recebe a FRF calculada a partir dos
+            # espectros acumulados até a média atual.
+            if frf_update_callback is not None:
+
+                partial_frf = (
+                    self._calculate_averaged_frf(
+                        frequency=frequency,
+                        Gxx=(
+                            Gxx_sum
+                            / completed_averages
+                        ),
+                        Gyy=(
+                            Gyy_sum
+                            / completed_averages
+                        ),
+                        Gxy=(
+                            Gxy_sum
+                            / completed_averages
+                        ),
+                    )
+                )
+
+                frf_update_callback(
+                    partial_frf,
+                    completed_averages,
+                    number_averages,
+                )
 
             # ------------------------------------------------
             # Progresso

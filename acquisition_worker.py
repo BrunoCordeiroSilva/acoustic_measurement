@@ -83,6 +83,10 @@ class MeasurementWorker(QObject):
         str,
     )
 
+    frf_updated = Signal(
+        object,
+    )
+
     finished = Signal(
         object,
     )
@@ -129,6 +133,9 @@ class MeasurementWorker(QObject):
                     ),
                     message_callback=(
                         self._message_callback
+                    ),
+                    frf_update_callback=(
+                        self._frf_update_callback
                     ),
                 )
             )
@@ -185,6 +192,19 @@ class MeasurementWorker(QObject):
 
         self.message.emit(
             message
+        )
+
+    # ========================================================
+
+    def _frf_update_callback(
+        self,
+        frf,
+        current: int,
+        total: int,
+    ):
+
+        self.frf_updated.emit(
+            frf
         )
 
 
