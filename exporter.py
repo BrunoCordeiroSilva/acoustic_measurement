@@ -76,6 +76,27 @@ class DataExporter:
         return path
 
     # ========================================================
+    # NOME DE ARQUIVO DA TL
+    # ========================================================
+
+    @staticmethod
+    def _safe_filename_component(
+        value: str,
+        fallback: str,
+    ) -> str:
+
+        component = value.strip() or fallback
+
+        for character in '\\/:*?"<>|':
+
+            component = component.replace(
+                character,
+                "_",
+            )
+
+        return component
+
+    # ========================================================
     # EXPORTAÇÃO DE FRF
     # ========================================================
 
@@ -653,9 +674,23 @@ class DataExporter:
         # TL
         # ----------------------------------------------------
 
+        experiment_name = (
+            DataExporter._safe_filename_component(
+                config.metadata.experiment_name,
+                "sem_nome",
+            )
+        )
+
+        experiment_number = (
+            DataExporter._safe_filename_component(
+                config.metadata.experiment_number,
+                "sem_numero",
+            )
+        )
+
         tl_path = (
             root
-            / "transmission_loss.csv"
+            / f"TL_{experiment_name}_{experiment_number}.csv"
         )
 
         DataExporter.export_tl(

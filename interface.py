@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pyqtgraph as pg
 
 from PySide6.QtCore import (
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QSizePolicy,
     QDialog,
+    QScrollArea,
 )
 
 from config import (
@@ -136,7 +138,7 @@ class PlotPopup(QDialog):
         button_layout.addStretch()
 
         self.fit_button = QPushButton(
-            "Fit"
+            "Zoom to fit"
         )
 
         self.close_button = QPushButton(
@@ -1098,12 +1100,14 @@ class MainWindow(QMainWindow):
         # ====================================================
 
         fit_button = QPushButton(
-            "Fit"
+            "Zoom to fit"
         )
 
         fit_button.setFixedHeight(24)
 
-        fit_button.setMaximumWidth(50)
+        fit_button.setFixedWidth(
+            fit_button.sizeHint().width() + 8
+        )
 
         fit_button.clicked.connect(
             fit_callback
@@ -1642,6 +1646,10 @@ class MainWindow(QMainWindow):
             self.results_tab
         )
 
+        self.tl_curve_entries = []
+
+        self.current_tl_curve = None
+
         self.tl_plot = pg.PlotWidget()
 
         self.tl_plot.setLabel(
@@ -1659,6 +1667,14 @@ class MainWindow(QMainWindow):
         self.tl_plot.showGrid(
             x=True,
             y=True,
+        )
+
+        self.tl_legend = self.tl_plot.addLegend()
+
+        self.tl_legend.anchor(
+            itemPos=(1, 0),
+            parentPos=(1, 0),
+            offset=(-10, 10),
         )
 
         layout.addWidget(
@@ -1696,52 +1712,184 @@ class MainWindow(QMainWindow):
             self.result_points_label,
         )
 
-        layout.addWidget(
-            result_group
+        result_group.setMaximumWidth(
+            260
         )
 
-        # ====================================================
-        # BOTÕES
-        # ====================================================
+        lower_layout = QGridLayout()
 
-        buttons_layout = QHBoxLayout()
+        lower_layout.setHorizontalSpacing(
+            10
+        )
+
+        lower_layout.setVerticalSpacing(
+            5
+        )
 
         self.process_button = QPushButton(
             "Processar TL"
         )
 
         self.save_button = QPushButton(
-            "Salvar ensaio"
+            "Salvar Ensaio CSV..."
         )
 
         self.fit_tl_button = QPushButton(
-            "Zoom-to-fit"
+            "Zoom to fit"
         )
 
         self.new_model_button = QPushButton(
             "Novo ensaio / modelo"
         )
 
-        buttons_layout.addWidget(
-            self.process_button
+        self.import_tl_button = QPushButton(
+            "Add TL CSV"
         )
 
-        buttons_layout.addWidget(
-            self.save_button
+        self.save_tl_png_button = QPushButton(
+            "Salvar Gráfico PNG..."
         )
 
-        buttons_layout.addWidget(
-            self.fit_tl_button
+        self.save_tl_csv_button = QPushButton(
+            "Salvar Gráfico CSV..."
         )
 
-        buttons_layout.addStretch()
+        for button in (
+            self.process_button,
+            self.save_button,
+            self.import_tl_button,
+            self.save_tl_png_button,
+            self.save_tl_csv_button,
+            self.fit_tl_button,
+            self.new_model_button,
+        ):
 
-        buttons_layout.addWidget(
+            button.setFixedWidth(
+                button.sizeHint().width() + 8
+            )
+
+        # Coluna 1: resultado do ensaio atual.
+        lower_layout.addWidget(
+            result_group,
+            0,
+            0,
+            3,
+            1,
+        )
+
+        # Coluna 2: processamento e salvamento do ensaio.
+        lower_layout.addWidget(
+            self.process_button,
+            0,
+            1,
+        )
+
+        lower_layout.addWidget(
+            self.save_button,
+            1,
+            1,
+        )
+
+        # Coluna 3: importação e exportação da comparação.
+        lower_layout.addWidget(
+            self.import_tl_button,
+            0,
+            2,
+        )
+
+        lower_layout.addWidget(
+            self.save_tl_png_button,
+            1,
+            2,
+        )
+
+        lower_layout.addWidget(
+            self.save_tl_csv_button,
+            2,
+            2,
+        )
+
+        self.tl_curve_visibility_group = QGroupBox(
+            "Curvas visíveis"
+        )
+
+        curve_scroll = QScrollArea()
+
+        curve_scroll.setWidgetResizable(
+            True
+        )
+
+        curve_widget = QWidget()
+
+        self.tl_curve_visibility_layout = QVBoxLayout(
+            curve_widget
+        )
+
+        self.tl_curve_visibility_layout.setContentsMargins(
+            6,
+            4,
+            6,
+            4,
+        )
+
+        self.tl_curve_visibility_layout.addStretch()
+
+        curve_scroll.setWidget(
+            curve_widget
+        )
+
+        curve_group_layout = QVBoxLayout(
+            self.tl_curve_visibility_group
+        )
+
+        curve_group_layout.addWidget(
+            curve_scroll
+        )
+
+        self.tl_curve_visibility_group.setFixedWidth(
+            240
+        )
+
+        # Coluna 4: seleção de curvas, deliberadamente estreita.
+        lower_layout.addWidget(
+            self.tl_curve_visibility_group,
+            0,
+            3,
+            3,
+            1,
+        )
+
+        # Coluna 5: ajuste de visualização.
+        lower_layout.addWidget(
+            self.fit_tl_button,
+            0,
+            4,
+        )
+
+        lower_layout.setColumnStretch(0, 1)
+
+        lower_layout.setColumnStretch(1, 1)
+
+        lower_layout.setColumnStretch(2, 1)
+
+        lower_layout.setColumnStretch(3, 0)
+
+        lower_layout.setColumnStretch(4, 1)
+
+        layout.addLayout(
+            lower_layout
+        )
+
+        new_model_layout = QHBoxLayout()
+
+        new_model_layout.addStretch()
+
+        new_model_layout.addWidget(
             self.new_model_button
         )
 
         layout.addLayout(
-            buttons_layout
+            new_model_layout
         )
 
         self.process_button.clicked.connect(
@@ -1758,6 +1906,18 @@ class MainWindow(QMainWindow):
 
         self.new_model_button.clicked.connect(
             self.start_new_model_experiment
+        )
+
+        self.import_tl_button.clicked.connect(
+            self.import_tl_csv_files
+        )
+
+        self.save_tl_png_button.clicked.connect(
+            self.save_tl_plot_png
+        )
+
+        self.save_tl_csv_button.clicked.connect(
+            self.save_tl_plot_csv
         )
 
     # ========================================================
@@ -3544,6 +3704,16 @@ class MainWindow(QMainWindow):
 
     def accept_measurement(self):
 
+        if (
+            self.last_measurement is not None
+            and self.last_measurement.quality.status
+            == MeasurementQualityStatus.REVIEW
+        ):
+
+            self.accept_measurement_with_warning()
+
+            return
+
         try:
 
             self.experiment.accept_measurement()
@@ -3742,7 +3912,7 @@ class MainWindow(QMainWindow):
         # RESULTADO TL
         # ====================================================
 
-        self.tl_plot.clear()
+        self._clear_tl_curves()
 
         self.instruction_label.setText(
             self.experiment
@@ -3769,8 +3939,6 @@ class MainWindow(QMainWindow):
             )
 
             result = self.tl_result
-
-            self.tl_plot.clear()
 
             valid_mask = (
                 result.valid_mask
@@ -3845,13 +4013,30 @@ class MainWindow(QMainWindow):
             # PLOT
             # =================================================
 
-            self.tl_plot.plot(
-                frequency_plot,
-                tl_plot,
-                pen=pg.mkPen(
-                    width=2
-                ),
-            )
+            if self.current_tl_curve is None:
+
+                self.current_tl_curve = (
+                    self._add_tl_curve(
+                        frequency=frequency_plot,
+                        transmission_loss=tl_plot,
+                        name="TL do ensaio atual",
+                    )
+                )
+
+            else:
+
+                self.current_tl_curve[
+                    "curve"
+                ].setData(
+                    frequency_plot,
+                    tl_plot,
+                )
+
+                self.current_tl_curve[
+                    "checkbox"
+                ].setChecked(
+                    True
+                )
 
             valid_range = (
                 result.valid_frequency_range
@@ -3891,6 +4076,326 @@ class MainWindow(QMainWindow):
     def fit_tl_plot(self):
 
         self.tl_plot.getViewBox().autoRange()
+
+    # ========================================================
+    # CURVAS DE TL
+    # ========================================================
+
+    def _add_tl_curve(
+        self,
+        frequency: np.ndarray,
+        transmission_loss: np.ndarray,
+        name: str,
+    ) -> dict:
+
+        colors = [
+            "#2979FF",
+            "#D50000",
+            "#00A152",
+            "#AA00FF",
+            "#FF6D00",
+            "#00838F",
+            "#6D4C41",
+        ]
+
+        color = colors[
+            len(self.tl_curve_entries) % len(colors)
+        ]
+
+        curve = self.tl_plot.plot(
+            frequency,
+            transmission_loss,
+            name=name,
+            pen=pg.mkPen(
+                color,
+                width=2,
+            ),
+        )
+
+        checkbox = QCheckBox(name)
+
+        checkbox.setChecked(True)
+
+        checkbox.setStyleSheet(
+            f"color: {color}; font-weight: bold;"
+        )
+
+        checkbox.toggled.connect(
+            lambda visible, plot_curve=curve:
+                plot_curve.setVisible(visible)
+        )
+
+        entry = {
+            "curve": curve,
+            "checkbox": checkbox,
+            "name": name,
+        }
+
+        self.tl_curve_entries.append(entry)
+
+        self.tl_curve_visibility_layout.insertWidget(
+            self.tl_curve_visibility_layout.count() - 1,
+            checkbox,
+        )
+
+        return entry
+
+    # ========================================================
+
+    def _clear_tl_curves(self):
+
+        for entry in self.tl_curve_entries:
+
+            self.tl_plot.removeItem(
+                entry["curve"]
+            )
+
+            self.tl_curve_visibility_layout.removeWidget(
+                entry["checkbox"]
+            )
+
+            entry["checkbox"].deleteLater()
+
+        self.tl_curve_entries.clear()
+
+        self.current_tl_curve = None
+
+    # ========================================================
+    # IMPORTAÇÃO DE TL
+    # ========================================================
+
+    def import_tl_csv_files(self):
+
+        filepaths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Escolha arquivos CSV de TL",
+            "",
+            "Arquivos CSV (*.csv);;Todos os arquivos (*)",
+        )
+
+        if not filepaths:
+
+            return
+
+        errors = []
+
+        imported = 0
+
+        for filepath in filepaths:
+
+            try:
+
+                dataframe = pd.read_csv(
+                    filepath,
+                    sep=None,
+                    engine="python",
+                )
+
+                required_columns = {
+                    "frequency_Hz",
+                    "TL_dB",
+                }
+
+                if not required_columns.issubset(
+                    dataframe.columns
+                ):
+
+                    raise ValueError(
+                        "O arquivo deve possuir as colunas "
+                        "frequency_Hz e TL_dB."
+                    )
+
+                frequency = pd.to_numeric(
+                    dataframe["frequency_Hz"],
+                    errors="coerce",
+                ).to_numpy()
+
+                transmission_loss = pd.to_numeric(
+                    dataframe["TL_dB"],
+                    errors="coerce",
+                ).to_numpy()
+
+                valid = (
+                    np.isfinite(frequency)
+                    & np.isfinite(transmission_loss)
+                )
+
+                if not np.any(valid):
+
+                    raise ValueError(
+                        "O arquivo não possui valores finitos "
+                        "de frequência e TL."
+                    )
+
+                self._add_tl_curve(
+                    frequency=frequency[valid],
+                    transmission_loss=(
+                        transmission_loss[valid]
+                    ),
+                    name=Path(filepath).stem,
+                )
+
+                imported += 1
+
+            except Exception as error:
+
+                errors.append(
+                    f"{Path(filepath).name}: {error}"
+                )
+
+        if imported:
+
+            self.fit_tl_plot()
+
+            self._update_controls()
+
+        if errors:
+
+            QMessageBox.warning(
+                self,
+                "Importação de TL",
+                "\n".join(errors),
+            )
+
+    # ========================================================
+    # EXPORTAÇÃO DO GRÁFICO
+    # ========================================================
+
+    def save_tl_plot_png(self):
+
+        if not self.tl_curve_entries:
+
+            QMessageBox.warning(
+                self,
+                "Salvar gráfico",
+                "Adicione ou processe ao menos uma curva de TL.",
+            )
+
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Salvar gráfico de TL",
+            "TL_comparacao.png",
+            "Imagem PNG (*.png)",
+        )
+
+        if not filepath:
+
+            return
+
+        if not filepath.lower().endswith(".png"):
+
+            filepath += ".png"
+
+        try:
+
+            saved = self.tl_plot.grab().save(
+                filepath,
+                "PNG",
+            )
+
+            if not saved:
+
+                raise OSError(
+                    "Não foi possível gravar a imagem PNG."
+                )
+
+        except OSError as error:
+
+            QMessageBox.critical(
+                self,
+                "Salvar gráfico",
+                str(error),
+            )
+
+    # ========================================================
+    # EXPORTAÇÃO DAS CURVAS ACUMULADAS
+    # ========================================================
+
+    def save_tl_plot_csv(self):
+
+        if not self.tl_curve_entries:
+
+            QMessageBox.warning(
+                self,
+                "Salvar gráfico CSV",
+                "Adicione ou processe ao menos uma curva de TL.",
+            )
+
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Salvar curvas de TL",
+            "TL_curvas_acumuladas.csv",
+            "Arquivos CSV (*.csv)",
+        )
+
+        if not filepath:
+
+            return
+
+        if not filepath.lower().endswith(".csv"):
+
+            filepath += ".csv"
+
+        columns = {}
+
+        used_names = set()
+
+        for index, entry in enumerate(
+            self.tl_curve_entries,
+            start=1,
+        ):
+
+            frequency, transmission_loss = entry[
+                "curve"
+            ].getData()
+
+            curve_name = entry["name"]
+
+            safe_name = "".join(
+                character
+                if character.isalnum() or character in "_-"
+                else "_"
+                for character in curve_name
+            ).strip("_") or f"curva_{index}"
+
+            original_name = safe_name
+
+            suffix = 2
+
+            while safe_name in used_names:
+
+                safe_name = f"{original_name}_{suffix}"
+
+                suffix += 1
+
+            used_names.add(safe_name)
+
+            columns[
+                f"frequency_Hz__{safe_name}"
+            ] = pd.Series(frequency)
+
+            columns[
+                f"TL_dB__{safe_name}"
+            ] = pd.Series(transmission_loss)
+
+        try:
+
+            pd.DataFrame(columns).to_csv(
+                filepath,
+                index=False,
+            )
+
+        except OSError as error:
+
+            QMessageBox.critical(
+                self,
+                "Salvar gráfico CSV",
+                str(error),
+            )
 
     # ========================================================
     # SALVAR
@@ -4032,7 +4537,7 @@ class MainWindow(QMainWindow):
 
         self.clipping_label.setText("-")
 
-        self.tl_plot.clear()
+        self._clear_tl_curves()
 
         self.result_range_label.setText("-")
 
@@ -4176,8 +4681,20 @@ class MainWindow(QMainWindow):
             self.tl_result is not None
         )
 
+        self.import_tl_button.setEnabled(
+            not acquisition_busy
+        )
+
         self.fit_tl_button.setEnabled(
-            self.tl_result is not None
+            bool(self.tl_curve_entries)
+        )
+
+        self.save_tl_png_button.setEnabled(
+            bool(self.tl_curve_entries)
+        )
+
+        self.save_tl_csv_button.setEnabled(
+            bool(self.tl_curve_entries)
         )
 
         self.new_model_button.setEnabled(
