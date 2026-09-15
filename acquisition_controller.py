@@ -1336,6 +1336,68 @@ class AcquisitionController:
     # AVALIAÇÃO DE QUALIDADE
     # ========================================================
 
+    def _get_quality_frequency_range(
+        self,
+        frequency: np.ndarray,
+    ) -> tuple[float, float]:
+        """Retorna a faixa válida efetiva para avaliar a qualidade."""
+
+        if frequency.size == 0:
+
+            raise AcquisitionControllerError(
+                "O espectro adquirido não possui pontos de frequência."
+            )
+
+        tl_config = self.config.transmission_loss
+
+        nyquist = float(frequency[-1])
+
+        if not tl_config.automatic_valid_frequency_range:
+
+            f_min = tl_config.valid_frequency_min
+
+            f_max = min(
+                tl_config.valid_frequency_max,
+                nyquist,
+            )
+
+        else:
+
+            speed_of_sound = self.config.acoustics.speed_of_sound
+
+            spacing_minimum = max(
+                0.05 * speed_of_sound / tl_config.spacing_12,
+                0.05 * speed_of_sound / tl_config.spacing_34,
+            )
+
+            spacing_maximum = min(
+                0.40 * speed_of_sound / tl_config.spacing_12,
+                0.40 * speed_of_sound / tl_config.spacing_34,
+            )
+
+            plane_wave_cutoff = (
+                1.84
+                * speed_of_sound
+                / (np.pi * tl_config.tube_diameter)
+            )
+
+            f_min = spacing_minimum
+
+            f_max = min(
+                spacing_maximum,
+                plane_wave_cutoff,
+                nyquist,
+            )
+
+        if f_max <= f_min:
+
+            raise AcquisitionControllerError(
+                "A geometria e a aquisição não produzem uma "
+                "faixa válida de frequências para avaliar a qualidade."
+            )
+
+        return float(f_min), float(f_max)
+
     def _evaluate_quality(
         self,
         frf: FRFResult,
@@ -1343,10 +1405,6 @@ class AcquisitionController:
             list[ChannelMetrics],
         completed_averages: int,
     ) -> MeasurementQualityReport:
-
-        tl_config = (
-            self.config.transmission_loss
-        )
 
         quality_config = (
             self.config.quality
@@ -1356,15 +1414,8 @@ class AcquisitionController:
         # Faixa válida solicitada
         # ----------------------------------------------------
 
-        f_min = (
-            tl_config.valid_frequency_min
-        )
-
-        f_max = min(
-            tl_config.valid_frequency_max,
-            float(
-                frf.frequency[-1]
-            ),
+        f_min, f_max = self._get_quality_frequency_range(
+            frf.frequency
         )
 
         band_mask = (

@@ -10,6 +10,7 @@ from PySide6.QtCore import (
     Qt,
     QThread,
     QTimer,
+    QSignalBlocker,
 )
 
 from PySide6.QtWidgets import (
@@ -53,6 +54,7 @@ from daq import (
 from acquisition_controller import (
     AcquisitionController,
     MeasurementQualityStatus,
+    FRFMeasurementResult,
 )
 
 from acquisition_worker import (
@@ -65,7 +67,12 @@ from experiments.transmission_loss import (
     TransmissionLossExperiment,
     TransmissionLossError,
     TLExperimentState,
+    TLMeasurementStep,
+    StoredTLMeasurement,
+    MeasurementAcceptance,
 )
+
+from signal_processing import FRFResult
 
 from exporter import (
     DataExporter,
@@ -1128,6 +1135,13 @@ class MainWindow(QMainWindow):
             self._update_valid_range_preview
         )
 
+        # Cada dispositivo possui seus próprios canais físicos. Sem esta
+        # conexão, os combos de referência e móvel continuavam mostrando os
+        # canais do primeiro dispositivo detectado.
+        self.device_combo.currentTextChanged.connect(
+            self._device_selection_changed
+        )
+
         # ====================================================
         # LABELS INICIAIS
         # ====================================================
@@ -1816,6 +1830,8 @@ class MainWindow(QMainWindow):
 
         self.current_tl_curve = None
 
+        self.tl_active_valid_range = None
+
         self.tl_plot = pg.PlotWidget()
 
         self.tl_plot.setLabel(
@@ -1908,6 +1924,10 @@ class MainWindow(QMainWindow):
             "Zoom to fit"
         )
 
+        self.tl_plot_settings_button = QPushButton(
+            "Configurações Gráfico"
+        )
+
         self.new_model_button = QPushButton(
             "Novo Ensaio/Modelo"
         )
@@ -1931,6 +1951,7 @@ class MainWindow(QMainWindow):
             self.save_tl_png_button,
             self.save_tl_csv_button,
             self.fit_tl_button,
+            self.tl_plot_settings_button,
             self.new_model_button,
         ):
 
@@ -2036,9 +2057,16 @@ class MainWindow(QMainWindow):
 
         # Coluna 5: ajuste de visualização.
         lower_layout.addWidget(
-            self.fit_tl_button,
+            self.tl_plot_settings_button,
             0,
             4,
+            Qt.AlignRight | Qt.AlignBottom,
+        )
+
+        lower_layout.addWidget(
+            self.fit_tl_button,
+            0,
+            5,
             Qt.AlignRight | Qt.AlignBottom,
         )
 
@@ -2051,6 +2079,8 @@ class MainWindow(QMainWindow):
         lower_layout.setColumnStretch(3, 0)
 
         lower_layout.setColumnStretch(4, 1)
+
+        lower_layout.setColumnStretch(5, 0)
 
         layout.addLayout(
             lower_layout
@@ -2078,6 +2108,10 @@ class MainWindow(QMainWindow):
 
         self.fit_tl_button.clicked.connect(
             self.fit_tl_plot
+        )
+
+        self.tl_plot_settings_button.clicked.connect(
+            self.open_tl_plot_settings
         )
 
         self.new_model_button.clicked.connect(
@@ -2544,69 +2578,73 @@ class MainWindow(QMainWindow):
         # THREAD
         # ====================================================
 
-        self.monitoring_thread = QThread(
+        monitoring_thread = QThread(
             self
         )
 
-        self.monitoring_worker = MonitoringWorker(
+        monitoring_worker = MonitoringWorker(
             daq=self.daq,
             config=self.config,
             monitor_num_samples=256,
             coherence_nperseg=512,
         )
 
-        self.monitoring_worker.moveToThread(
-            self.monitoring_thread
+        monitoring_worker.moveToThread(
+            monitoring_thread
         )
+
+        self.monitoring_thread = monitoring_thread
+
+        self.monitoring_worker = monitoring_worker
 
         # ====================================================
         # CONEXÕES
         # ====================================================
 
-        self.monitoring_thread.started.connect(
-            self.monitoring_worker.run
+        monitoring_thread.started.connect(
+            monitoring_worker.run
         )
 
-        self.monitoring_worker.started.connect(
+        monitoring_worker.started.connect(
             self._monitoring_started
         )
 
-        self.monitoring_worker.error.connect(
+        monitoring_worker.error.connect(
             self._monitoring_error
         )
 
-        self.monitoring_worker.done.connect(
-            self.monitoring_thread.quit
+        monitoring_worker.done.connect(
+            monitoring_thread.quit
         )
 
-        self.monitoring_worker.done.connect(
-            self.monitoring_worker.deleteLater
+        monitoring_worker.done.connect(
+            monitoring_worker.deleteLater
         )
 
-        self.monitoring_thread.finished.connect(
+        monitoring_thread.finished.connect(
             self._monitoring_thread_finished
         )
 
-        self.monitoring_thread.finished.connect(
-            self.monitoring_thread.deleteLater
+        monitoring_thread.finished.connect(
+            monitoring_thread.deleteLater
         )
 
         self.monitoring_running = False
 
         self.monitoring_stop_requested = False
 
-        self.monitoring_thread.start()
+        monitoring_thread.start()
 
     # ========================================================
 
     def stop_monitoring(
         self,
         wait: bool = False,
-    ):
+    ) -> bool:
 
         if self.monitoring_worker is None:
 
-            return
+            return True
 
         self.monitoring_stop_requested = True
 
@@ -2630,6 +2668,15 @@ class MainWindow(QMainWindow):
             # sejam processados antes de uma nova thread.
             QApplication.processEvents()
 
+            if (
+                self.monitoring_thread is not None
+                and self.monitoring_thread.isRunning()
+            ):
+
+                return False
+
+        return True
+
     # ========================================================
 
     def _monitoring_started(self):
@@ -2640,7 +2687,21 @@ class MainWindow(QMainWindow):
 
     # ========================================================
 
-    def _monitoring_thread_finished(self):
+    def _monitoring_thread_finished(
+        self,
+        finished_thread: QThread | None = None,
+    ):
+
+        # A finalização é entregue pela fila de eventos da GUI. Se uma nova
+        # sessão já começou, este sinal pertence à sessão anterior e não deve
+        # alterar suas referências nem iniciar uma medição pendente.
+        if finished_thread is None:
+
+            finished_thread = self.sender()
+
+        if finished_thread is not self.monitoring_thread:
+
+            return
 
         self.monitoring_running = False
 
@@ -2684,6 +2745,35 @@ class MainWindow(QMainWindow):
             "interrompido.\n\n"
             f"{message}",
         )
+
+    # ========================================================
+
+    def _clear_monitoring_data(self) -> None:
+        """Remove dados e curvas pertencentes ao monitoramento ao vivo."""
+
+        self.last_monitoring_data = None
+
+        self.spectrum_reference_curve.setData([], [])
+
+        self.spectrum_mobile_curve.setData([], [])
+
+        self.coherence_curve.setData([], [])
+
+        if self.time_popup is not None:
+
+            self.time_popup.reference_curve.setData([], [])
+
+            self.time_popup.mobile_curve.setData([], [])
+
+        if self.spectrum_popup is not None:
+
+            self.spectrum_popup.reference_curve.setData([], [])
+
+            self.spectrum_popup.mobile_curve.setData([], [])
+
+        if self.coherence_popup is not None:
+
+            self.coherence_popup.coherence_curve.setData([], [])
 
     # ========================================================
     # ATUALIZAÇÃO DOS GRÁFICOS
@@ -2833,6 +2923,87 @@ class MainWindow(QMainWindow):
     # DAQ
     # ========================================================
 
+    def _device_selection_changed(
+        self,
+        device_name: str,
+    ) -> None:
+        """Atualiza os canais físicos para o dispositivo selecionado."""
+
+        if not device_name:
+
+            return
+
+        # A task de monitoramento mantém a DAQ em uso. Libera-a antes de
+        # selecionar outro módulo, inclusive quando a troca é feita pelo
+        # usuário diretamente no combo.
+        if (
+            self.monitoring_thread is not None
+            and
+            self.monitoring_thread.isRunning()
+        ):
+
+            if not self.stop_monitoring(wait=True):
+
+                QMessageBox.warning(
+                    self,
+                    "DAQ",
+                    "Não foi possível encerrar o monitoramento contínuo. "
+                    "Aguarde alguns segundos e tente novamente.",
+                )
+
+                return
+
+        try:
+
+            self.daq.connect(
+                device_name
+            )
+
+            channels = (
+                self.daq
+                .get_available_ai_channels()
+            )
+
+            # Evita sinais intermediários enquanto os combos são refeitos.
+            with QSignalBlocker(self.reference_channel_combo):
+                with QSignalBlocker(self.mobile_channel_combo):
+
+                    self.reference_channel_combo.clear()
+
+                    self.mobile_channel_combo.clear()
+
+                    for channel in channels:
+
+                        self.reference_channel_combo.addItem(
+                            channel
+                        )
+
+                        self.mobile_channel_combo.addItem(
+                            channel
+                        )
+
+                    if channels:
+
+                        self.reference_channel_combo.setCurrentIndex(
+                            0
+                        )
+
+                        self.mobile_channel_combo.setCurrentIndex(
+                            min(1, len(channels) - 1)
+                        )
+
+        except DAQError as error:
+
+            self.reference_channel_combo.clear()
+
+            self.mobile_channel_combo.clear()
+
+            QMessageBox.critical(
+                self,
+                "Erro DAQ",
+                str(error),
+            )
+
     def refresh_devices(self):
 
         # Evita mexer na DAQ enquanto o
@@ -2854,13 +3025,13 @@ class MainWindow(QMainWindow):
                 .discover_ai_devices()
             )
 
-            self.device_combo.clear()
-
-            self.reference_channel_combo.clear()
-
-            self.mobile_channel_combo.clear()
-
             if not devices:
+
+                self.device_combo.clear()
+
+                self.reference_channel_combo.clear()
+
+                self.mobile_channel_combo.clear()
 
                 QMessageBox.warning(
                     self,
@@ -2871,42 +3042,25 @@ class MainWindow(QMainWindow):
 
                 return
 
-            for device in devices:
+            # Bloqueia o sinal para carregar a lista uma única vez, depois
+            # delega a mesma rotina usada na troca manual de dispositivo.
+            with QSignalBlocker(self.device_combo):
 
-                self.device_combo.addItem(
-                    device
-                )
+                self.device_combo.clear()
 
-            selected_device = devices[0]
+                for device in devices:
 
-            self.daq.connect(
-                selected_device
-            )
+                    self.device_combo.addItem(
+                        device
+                    )
 
-            channels = (
-                self.daq
-                .get_available_ai_channels()
-            )
-
-            for channel in channels:
-
-                self.reference_channel_combo.addItem(
-                    channel
-                )
-
-                self.mobile_channel_combo.addItem(
-                    channel
-                )
-
-            if len(channels) >= 2:
-
-                self.reference_channel_combo.setCurrentIndex(
+                self.device_combo.setCurrentIndex(
                     0
                 )
 
-                self.mobile_channel_combo.setCurrentIndex(
-                    1
-                )
+            self._device_selection_changed(
+                self.device_combo.currentText()
+            )
 
         except DAQError as error:
 
@@ -3073,9 +3227,16 @@ class MainWindow(QMainWindow):
             self.monitoring_thread.isRunning()
         ):
 
-            self.stop_monitoring(
-                wait=True
-            )
+            if not self.stop_monitoring(wait=True):
+
+                QMessageBox.warning(
+                    self,
+                    "Configuração",
+                    "Não foi possível encerrar o monitoramento contínuo. "
+                    "Aguarde alguns segundos e tente novamente.",
+                )
+
+                return False
 
         try:
 
@@ -4150,74 +4311,13 @@ class MainWindow(QMainWindow):
 
             result = self.tl_result
 
-            valid_mask = (
-                result.valid_mask
-            )
+            # Mantém toda a curva finita. A faixa válida é uma opção de
+            # visualização, não um filtro que descarte o diagnóstico.
+            plot_mask = np.isfinite(result.transmission_loss)
 
-            # =================================================
-            # VÁLIDOS
-            # =================================================
+            frequency_plot = result.frequency[plot_mask]
 
-            if np.any(valid_mask):
-
-                frequency_plot = (
-                    result.frequency[
-                        valid_mask
-                    ]
-                )
-
-                tl_plot = (
-                    result.transmission_loss[
-                        valid_mask
-                    ]
-                )
-
-            # =================================================
-            # DIAGNÓSTICO
-            # =================================================
-
-            else:
-
-                valid_range = (
-                    result.valid_frequency_range
-                )
-
-                diagnostic_mask = (
-                    np.isfinite(
-                        result.transmission_loss
-                    )
-                    &
-                    (
-                        result.frequency
-                        >= valid_range.minimum
-                    )
-                    &
-                    (
-                        result.frequency
-                        <= valid_range.maximum
-                    )
-                )
-
-                frequency_plot = (
-                    result.frequency[
-                        diagnostic_mask
-                    ]
-                )
-
-                tl_plot = (
-                    result.transmission_loss[
-                        diagnostic_mask
-                    ]
-                )
-
-                QMessageBox.warning(
-                    self,
-                    "Qualidade da TL",
-                    "Nenhum ponto passou por todos "
-                    "os critérios de validade.\n\n"
-                    "A curva calculada será exibida "
-                    "apenas para diagnóstico.",
-                )
+            tl_plot = result.transmission_loss[plot_mask]
 
             # =================================================
             # PLOT
@@ -4230,6 +4330,10 @@ class MainWindow(QMainWindow):
                         frequency=frequency_plot,
                         transmission_loss=tl_plot,
                         name="TL do ensaio atual",
+                        valid_frequency_range=(
+                            result.valid_frequency_range.minimum,
+                            result.valid_frequency_range.maximum,
+                        ),
                     )
                 )
 
@@ -4242,6 +4346,11 @@ class MainWindow(QMainWindow):
                     tl_plot,
                 )
 
+                self.current_tl_curve["valid_frequency_range"] = (
+                    result.valid_frequency_range.minimum,
+                    result.valid_frequency_range.maximum,
+                )
+
                 self.current_tl_curve[
                     "checkbox"
                 ].setChecked(
@@ -4250,6 +4359,11 @@ class MainWindow(QMainWindow):
 
             valid_range = (
                 result.valid_frequency_range
+            )
+
+            self.tl_active_valid_range = (
+                valid_range.minimum,
+                valid_range.maximum,
             )
 
             self.fit_tl_plot()
@@ -4288,6 +4402,243 @@ class MainWindow(QMainWindow):
         self.tl_plot.getViewBox().autoRange()
 
     # ========================================================
+
+    def open_tl_plot_settings(self):
+        """Abre os controles de visualização e importação de FRFs."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Configurações Gráfico")
+        dialog.setMinimumWidth(430)
+        layout = QVBoxLayout(dialog)
+
+        clear_button = QPushButton("Limpar Gráfico")
+        clear_button.clicked.connect(self._confirm_clear_tl_curves)
+        layout.addWidget(clear_button)
+
+        form = QFormLayout()
+        inputs = {}
+        for key, label in (
+            ("x_min", "X mínimo (Hz):"),
+            ("x_max", "X máximo (Hz):"),
+            ("y_min", "Y mínimo (dB):"),
+            ("y_max", "Y máximo (dB):"),
+        ):
+            spin = QDoubleSpinBox()
+            spin.setRange(-1e12, 1e12)
+            spin.setDecimals(3)
+            spin.setValue(0.0)
+            inputs[key] = spin
+            form.addRow(label, spin)
+        layout.addLayout(form)
+
+        apply_button = QPushButton("Aplicar limites")
+        apply_button.clicked.connect(
+            lambda: self._set_tl_plot_range(inputs)
+        )
+        layout.addWidget(apply_button)
+
+        valid_button = QPushButton("Ajustar na faixa válida")
+        valid_button.clicked.connect(
+            lambda: self._fit_tl_valid_range(inputs)
+        )
+        layout.addWidget(valid_button)
+
+        read_frfs_button = QPushButton("Ler FRFs")
+        read_frfs_button.clicked.connect(
+            self.load_tl_from_frf_files
+        )
+        layout.addWidget(read_frfs_button)
+
+        close_button = QPushButton("Fechar")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+        dialog.exec()
+
+    # ========================================================
+
+    def _confirm_clear_tl_curves(self):
+        if not self.tl_curve_entries:
+            return
+        answer = QMessageBox.question(self, "Limpar gráfico",
+            "Todas as curvas serão removidas da interface. Deseja continuar?",
+            QMessageBox.Yes | QMessageBox.No)
+        if answer == QMessageBox.Yes:
+            self._clear_tl_curves()
+            self.tl_active_valid_range = None
+            self._update_controls()
+
+    def _set_tl_plot_range(self, inputs):
+        x_min, x_max = inputs["x_min"].value(), inputs["x_max"].value()
+        y_min, y_max = inputs["y_min"].value(), inputs["y_max"].value()
+        if x_max <= x_min or y_max <= y_min:
+            QMessageBox.warning(self, "Limites do gráfico",
+                "Os limites máximos devem ser maiores que os mínimos.")
+            return
+        self.tl_plot.getViewBox().setRange(
+            xRange=(x_min, x_max), yRange=(y_min, y_max), padding=0)
+
+    def _fit_tl_valid_range(self, inputs):
+        valid_ranges = [
+            entry["valid_frequency_range"]
+            for entry in self.tl_curve_entries
+            if entry.get("valid_frequency_range") is not None
+        ]
+
+        if not valid_ranges:
+            QMessageBox.warning(self, "Faixa válida",
+                "Nenhuma curva possui informação de faixa válida.")
+            return
+        x_min, x_max = valid_ranges[-1]
+        values = []
+        for entry in self.tl_curve_entries:
+            x, y = entry["curve"].getData()
+            if x is not None:
+                values.extend(y[(x >= x_min) & (x <= x_max) & np.isfinite(y)])
+        if not values:
+            return
+        y_min, y_max = float(np.min(values)), float(np.max(values))
+        padding = max((y_max - y_min) * 0.05, 0.1)
+        inputs["x_min"].setValue(x_min); inputs["x_max"].setValue(x_max)
+        inputs["y_min"].setValue(y_min - padding); inputs["y_max"].setValue(y_max + padding)
+        self._set_tl_plot_range(inputs)
+
+    def load_tl_from_frf_files(self):
+        """Lê H31/H32/H34 das cargas A e B e gera uma curva de TL."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Ler FRFs para calcular TL")
+        dialog.setMinimumWidth(700)
+        layout = QVBoxLayout(dialog)
+
+        instruction = QLabel(
+            "Associe cada arquivo CSV à FRF indicada na mesma linha. "
+            "Os seis arquivos devem usar o mesmo vetor de frequência."
+        )
+        instruction.setWordWrap(True)
+        layout.addWidget(instruction)
+
+        form = QFormLayout()
+        file_inputs = {}
+
+        for step in TransmissionLossExperiment.MEASUREMENT_SEQUENCE:
+            filepath_input = QLineEdit()
+            filepath_input.setReadOnly(True)
+            choose_button = QPushButton("Selecionar...")
+            choose_button.clicked.connect(
+                lambda _, field=filepath_input, label=step.value:
+                    self._choose_frf_file(field, label)
+            )
+            row = QHBoxLayout()
+            row.addWidget(filepath_input, stretch=1)
+            row.addWidget(choose_button)
+            form.addRow(f"{step.value}:", row)
+            file_inputs[step] = filepath_input
+
+        layout.addLayout(form)
+
+        name_input = QLineEdit("TL importada")
+        layout.addWidget(QLabel("Nome da curva:"))
+        layout.addWidget(name_input)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_button = QPushButton("Cancelar")
+        import_button = QPushButton("Ler FRFs e calcular TL")
+        cancel_button.clicked.connect(dialog.reject)
+        import_button.clicked.connect(dialog.accept)
+        buttons.addWidget(cancel_button)
+        buttons.addWidget(import_button)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+
+            return
+
+        paths = {
+            step: field.text().strip()
+            for step, field in file_inputs.items()
+        }
+
+        missing = [step.value for step, path in paths.items() if not path]
+        if missing:
+
+            QMessageBox.warning(
+                self,
+                "Ler FRFs",
+                "Selecione um arquivo para: " + ", ".join(missing),
+            )
+
+            return
+
+        curve_name = name_input.text().strip()
+        if not curve_name:
+
+            QMessageBox.warning(
+                self,
+                "Ler FRFs",
+                "Informe um nome para a curva de TL.",
+            )
+
+            return
+
+        imported = {}
+        for step, path in paths.items():
+            try:
+                data = pd.read_csv(path, sep=None, engine="python")
+                required = {"frequency_Hz", "H_real", "H_imag"}
+                if not required.issubset(data.columns):
+                    raise ValueError("requer frequency_Hz, H_real e H_imag")
+                frequency = pd.to_numeric(data["frequency_Hz"], errors="coerce").to_numpy()
+                H = (pd.to_numeric(data["H_real"], errors="coerce").to_numpy()
+                     + 1j * pd.to_numeric(data["H_imag"], errors="coerce").to_numpy())
+                valid = (data["valid"].astype(bool).to_numpy()
+                         if "valid" in data else np.isfinite(H))
+                if not np.all(np.isfinite(frequency) & np.isfinite(H)):
+                    raise ValueError("possui frequências ou FRFs inválidas")
+                zeros = np.zeros(frequency.size)
+                frf = FRFResult(frequency, H, np.ones(frequency.size), zeros, zeros,
+                                np.zeros(frequency.size, dtype=complex), valid)
+                result = FRFMeasurementResult(frf, 0, 0, 0, 0, 0, 0, [], None)
+                imported[step] = StoredTLMeasurement(
+                    step, result, MeasurementAcceptance.ACCEPTED)
+            except Exception as error:
+                QMessageBox.warning(self, "Ler FRFs",
+                    f"Não foi possível ler {step.value}: {error}")
+                return
+
+        try:
+            imported_experiment = TransmissionLossExperiment(self.controller, self.config)
+            imported_experiment.measurements = imported
+            imported_experiment.state = TLExperimentState.READY_TO_PROCESS
+            result = imported_experiment.process()
+            mask = np.isfinite(result.transmission_loss)
+            self._add_tl_curve(
+                result.frequency[mask], result.transmission_loss[mask], curve_name,
+                (result.valid_frequency_range.minimum,
+                 result.valid_frequency_range.maximum),
+            )
+            self.tl_active_valid_range = (result.valid_frequency_range.minimum,
+                                          result.valid_frequency_range.maximum)
+            self.fit_tl_plot()
+            self._update_controls()
+        except TransmissionLossError as error:
+            QMessageBox.warning(self, "Ler FRFs", str(error))
+
+    def _choose_frf_file(self, field: QLineEdit, step_name: str):
+        """Seleciona o CSV para uma FRF já identificada no diálogo."""
+
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Selecione a FRF {step_name}",
+            "",
+            "Arquivos CSV (*.csv);;Todos os arquivos (*)",
+        )
+
+        if filepath:
+
+            field.setText(filepath)
+
+    # ========================================================
     # CURVAS DE TL
     # ========================================================
 
@@ -4296,6 +4647,7 @@ class MainWindow(QMainWindow):
         frequency: np.ndarray,
         transmission_loss: np.ndarray,
         name: str,
+        valid_frequency_range: tuple[float, float] | None = None,
     ) -> dict:
 
         colors = [
@@ -4339,6 +4691,7 @@ class MainWindow(QMainWindow):
             "curve": curve,
             "checkbox": checkbox,
             "name": name,
+            "valid_frequency_range": valid_frequency_range,
         }
 
         self.tl_curve_entries.append(entry)
@@ -4437,12 +4790,38 @@ class MainWindow(QMainWindow):
                         "de frequência e TL."
                     )
 
+                valid_frequency_range = None
+
+                # CSVs exportados pela aplicação trazem a coluna ``valid``.
+                # Ela permite recuperar a faixa usada originalmente sem
+                # esconder os pontos fora dela no gráfico.
+                if "valid" in dataframe.columns:
+
+                    valid_column = (
+                        dataframe["valid"]
+                        .astype(str)
+                        .str.strip()
+                        .str.lower()
+                        .isin(("true", "1", "sim", "yes"))
+                        .to_numpy()
+                    )
+
+                    valid_band = valid & valid_column
+
+                    if np.any(valid_band):
+
+                        valid_frequency_range = (
+                            float(np.min(frequency[valid_band])),
+                            float(np.max(frequency[valid_band])),
+                        )
+
                 self._add_tl_curve(
                     frequency=frequency[valid],
                     transmission_loss=(
                         transmission_loss[valid]
                     ),
                     name=Path(filepath).stem,
+                    valid_frequency_range=valid_frequency_range,
                 )
 
                 imported += 1
@@ -4724,6 +5103,22 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.Yes:
 
             return
+
+        # O monitor do modelo anterior não deve permanecer com a DAQ aberta
+        # enquanto o operador revisa a configuração do próximo ensaio.
+        # Os campos da aba Configuração não são alterados aqui.
+        if not self.stop_monitoring(wait=True):
+
+            QMessageBox.warning(
+                self,
+                "Novo ensaio",
+                "Não foi possível encerrar o monitoramento contínuo. "
+                "Aguarde alguns segundos e tente novamente.",
+            )
+
+            return
+
+        self._clear_monitoring_data()
 
         self.experiment.reset()
 
