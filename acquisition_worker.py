@@ -31,38 +31,12 @@ from experiments.transmission_loss import (
     TransmissionLossError,
 )
 
+from monitoring import MonitoringData
+
 
 # ============================================================
 # RESULTADO DO MONITORAMENTO
 # ============================================================
-
-@dataclass
-class MonitoringData:
-    """
-    Pacote mais recente produzido pelo MonitoringWorker.
-
-    O monitoramento é apenas visual e não interfere
-    nas medições oficiais usadas para calcular a TL.
-    """
-
-    time: np.ndarray
-
-    reference_signal: np.ndarray
-
-    mobile_signal: np.ndarray
-
-    frequency: np.ndarray
-
-    reference_spectrum: np.ndarray
-
-    mobile_spectrum: np.ndarray
-
-    coherence_frequency: np.ndarray
-
-    coherence: np.ndarray
-
-    sample_rate: float
-
 
 # ============================================================
 # WORKER DE MEDIÇÃO OFICIAL
@@ -223,7 +197,6 @@ class MonitoringWorker(QObject):
 
     Ele existe somente para:
 
-        - sinal temporal em tempo real
         - espectro em tempo real
         - coerência em tempo real
 
@@ -273,25 +246,6 @@ class MonitoringWorker(QObject):
         self._latest_data_lock = Lock()
 
         self._latest_data: MonitoringData | None = None
-
-        # ========================================================
-        # BUFFER TEMPORAL
-        # ========================================================
-
-        self.time_window_seconds = 2.0
-
-        self._reference_buffer = np.array(
-            [],
-            dtype=np.float64,
-        )
-
-        self._mobile_buffer = np.array(
-            [],
-            dtype=np.float64,
-)
-        # Número total de amostras adquiridas
-        # desde o início deste monitoramento.
-        self._total_samples_acquired = 0
 
     # ========================================================
     # SOLICITA PARADA
@@ -446,81 +400,6 @@ class MonitoringWorker(QObject):
                 )
 
                 # =================================================
-                # TEMPO TOTAL ADQUIRIDO
-                # =================================================
-
-                self._total_samples_acquired += (
-                    reference_signal.size
-                )
-
-                # =================================================
-                # BUFFER TEMPORAL CONTÍNUO
-                # =================================================
-
-                max_samples = int(
-                    sample_rate
-                    * self.time_window_seconds
-                )
-
-                self._reference_buffer = np.concatenate(
-                    (
-                        self._reference_buffer,
-                        reference_signal,
-                    )
-                )
-
-                self._mobile_buffer = np.concatenate(
-                    (
-                        self._mobile_buffer,
-                        mobile_signal,
-                    )
-                )
-
-                # Mantém apenas os últimos 2 segundos
-
-                if self._reference_buffer.size > max_samples:
-
-                    self._reference_buffer = (
-                        self._reference_buffer[
-                            -max_samples:
-                        ]
-                    )
-
-                if self._mobile_buffer.size > max_samples:
-
-                    self._mobile_buffer = (
-                        self._mobile_buffer[
-                            -max_samples:
-                        ]
-                    )
-
-                # =================================================
-                # EIXO DE TEMPO CONTÍNUO
-                # =================================================
-
-                num_points = (
-                    self._reference_buffer.size
-                )
-
-                end_sample = (
-                    self._total_samples_acquired
-                )
-
-                start_sample = (
-                    end_sample
-                    -
-                    num_points
-                )
-
-                time = (
-                    np.arange(
-                        start_sample,
-                        end_sample,
-                        dtype=np.float64,
-                    )
-                    / sample_rate
-                )
-                # =================================================
                 # FFT
                 # =================================================
 
@@ -588,16 +467,6 @@ class MonitoringWorker(QObject):
                 # =================================================
 
                 monitor_data = MonitoringData(
-                    time=time,
-
-                    reference_signal=(
-                        self._reference_buffer.copy()
-                    ),
-
-                    mobile_signal=(
-                        self._mobile_buffer.copy()
-                    ),
-
                     frequency=(
                         fft_reference.frequency
                     ),
