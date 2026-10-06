@@ -174,6 +174,18 @@ FRFUpdateCallback = Callable[
 ]
 
 
+@dataclass
+class MultiFRFMeasurementResult:
+    """Três FRFs simultâneas e decisão de qualidade conjunta da terminação."""
+
+    measurements: dict[int, FRFMeasurementResult]
+    quality: MeasurementQualityReport
+
+    @property
+    def frfs(self) -> dict[int, FRFResult]:
+        return {position: measurement.frf for position, measurement in self.measurements.items()}
+
+
 # ============================================================
 # CONTROLLER
 # ============================================================
@@ -201,13 +213,9 @@ class AcquisitionController:
     - detectar possível clipping
     - avaliar qualidade da medição
 
-    Esta classe NÃO conhece:
+    A aquisição TL associa P3 às respostas P1/P2/P4, mas não calcula:
 
-    - H31
-    - H32
-    - H34
-    - Carga A
-    - Carga B
+    - separação entre Carga A e Carga B
     - ABCD
     - TL
     """
@@ -412,485 +420,175 @@ class AcquisitionController:
         self,
         reference_channel_index: int = 0,
         response_channel_index: int = 1,
-        progress_callback:
-            Optional[ProgressCallback] = None,
-        message_callback:
-            Optional[MessageCallback] = None,
-        frf_update_callback:
-            Optional[FRFUpdateCallback] = None,
+        progress_callback: Optional[ProgressCallback] = None,
+        message_callback: Optional[MessageCallback] = None,
+        frf_update_callback: Optional[FRFUpdateCallback] = None,
     ) -> FRFMeasurementResult:
-        """
-        Executa uma medição completa de FRF.
+        """Aquisição genérica de um par, pelo mesmo motor multicanal."""
+        def update(frfs, current, total):
+            if frf_update_callback is not None:
+                frf_update_callback(frfs[0], current, total)
 
-        Para o ensaio de TL futuramente:
+        return self.acquire_frf_set(
+            reference_channel_index, {0: response_channel_index},
+            progress_callback, message_callback,
+            update if frf_update_callback is not None else None,
+        ).measurements[0]
 
-            referência = microfone posição 3
-            resposta   = microfone móvel
+    def acquire_tl_load(
+        self, progress_callback=None, message_callback=None, frf_update_callback=None,
+    ) -> MultiFRFMeasurementResult:
+        """Adquire P1–P4 simultaneamente para uma única terminação."""
+        self.config.validate()
+        indices = self.config.tl_channel_indices()
+        return self.acquire_frf_set(
+            indices[3], {position: indices[position] for position in (1, 2, 4)},
+            progress_callback, message_callback, frf_update_callback,
+        )
 
-        Exemplo:
-
-            posição móvel = 1
-
-            x = P3
-            y = P1
-
-            H = P1/P3
-        """
-
+    def acquire_frf_set(
+        self,
+        reference_channel_index: int,
+        response_channel_indices: dict[int, int],
+        progress_callback=None,
+        message_callback=None,
+        frf_update_callback=None,
+    ) -> MultiFRFMeasurementResult:
+        """Uma leitura por média: todos os pares usam o MESMO bloco e relógio."""
         self.reset_cancel()
-
-        self._validate_frf_channels(
-            reference_channel_index,
-            response_channel_index,
-        )
-
-        acquisition_config = (
-            self.config.acquisition
-        )
-
-        number_averages = (
-            acquisition_config.num_averages
-        )
-
+        if not response_channel_indices:
+            raise AcquisitionControllerError("Nenhum canal de resposta foi definido.")
+        for index in response_channel_indices.values():
+            self._validate_frf_channels(reference_channel_index, index)
+        if len(set(response_channel_indices.values())) != len(response_channel_indices):
+            raise AcquisitionControllerError("Os canais de resposta devem ser diferentes.")
+        acquisition = self.config.acquisition
+        number_averages = acquisition.num_averages
         if number_averages <= 0:
-
-            raise AcquisitionControllerError(
-                "O número de médias deve "
-                "ser maior que zero."
-            )
-
-        # ----------------------------------------------------
-        # Configuração do hardware
-        # ----------------------------------------------------
-
+            raise AcquisitionControllerError("O número de médias deve ser maior que zero.")
         if message_callback is not None:
-
-            message_callback(
-                "Configurando a DAQ..."
-            )
-
+            message_callback("Configurando a DAQ...")
         self.configure_hardware()
-
-        # ----------------------------------------------------
-        # Estabilização
-        # ----------------------------------------------------
-
-        self._wait_stabilization(
-            message_callback
-        )
-
+        self._wait_stabilization(message_callback)
         self._check_cancelled()
 
-        # ----------------------------------------------------
-        # Acumuladores espectrais
-        # ----------------------------------------------------
-
-        Gxx_sum = None
-        Gyy_sum = None
-        Gxy_sum = None
-
+        count = len(self._get_active_channels())
+        sum_square = np.zeros(count)
+        total_samples = np.zeros(count, dtype=np.int64)
+        peak_values = np.zeros(count)
+        clipping_detected = np.zeros(count, dtype=bool)
+        max_clipping_ratio = np.zeros(count)
+        sums = {}
         frequency = None
-
-        # ----------------------------------------------------
-        # Acumuladores das métricas temporais
-        # ----------------------------------------------------
-
-        active_channels = (
-            self._get_active_channels()
-        )
-
-        number_channels = len(
-            active_channels
-        )
-
-        sum_square = np.zeros(
-            number_channels,
-            dtype=np.float64,
-        )
-
-        total_samples = np.zeros(
-            number_channels,
-            dtype=np.int64,
-        )
-
-        peak_values = np.zeros(
-            number_channels,
-            dtype=np.float64,
-        )
-
-        clipping_detected = np.zeros(
-            number_channels,
-            dtype=bool,
-        )
-
-        max_clipping_ratio = np.zeros(
-            number_channels,
-            dtype=np.float64,
-        )
-
-        completed_averages = 0
-
         start_time = monotonic()
+        frfs = {}
 
-        # ====================================================
-        # LOOP DAS MÉDIAS
-        # ====================================================
-
-        for average_index in range(
-            number_averages
-        ):
-
+        for current in range(1, number_averages + 1):
             self._check_cancelled()
-
-            current_average = (
-                average_index + 1
-            )
-
             if message_callback is not None:
-
-                message_callback(
-                    f"Adquirindo média "
-                    f"{current_average} "
-                    f"de {number_averages}..."
-                )
-
-            # ------------------------------------------------
-            # Aquisição temporal
-            # ------------------------------------------------
-
+                message_callback(f"Adquirindo média {current} de {number_averages}...")
             try:
-
-                acquisition_data = (
-                    self.daq.acquire()
-                )
-
+                block = self.daq.acquire()
             except DAQError as exc:
-
-                raise AcquisitionControllerError(
-                    f"Erro na média "
-                    f"{current_average}."
-                ) from exc
-
+                raise AcquisitionControllerError(f"Erro na média {current}.") from exc
             self._check_cancelled()
-
-            # ------------------------------------------------
-            # Verificações do bloco
-            # ------------------------------------------------
-
-            self._validate_acquisition_block(
-                acquisition_data,
-                number_channels,
-            )
-
-            # ------------------------------------------------
-            # Taxa REAL da DAQ
-            # ------------------------------------------------
-
-            sample_rate = (
-                acquisition_data.sample_rate
-            )
-
-            # ------------------------------------------------
-            # Canal de referência
-            # ------------------------------------------------
-
-            reference_signal = (
-                acquisition_data.data[
-                    :,
-                    reference_channel_index,
-                ]
-            )
-
-            # ------------------------------------------------
-            # Canal de resposta
-            # ------------------------------------------------
-
-            response_signal = (
-                acquisition_data.data[
-                    :,
-                    response_channel_index,
-                ]
-            )
-
-            # ------------------------------------------------
-            # FRF do bloco
-            #
-            # IMPORTANTE:
-            #
-            # nperseg = N
-            #
-            # Neste estágio não fazemos Welch
-            # subdividindo o bloco.
-            #
-            # A média será realizada ENTRE os blocos.
-            # ------------------------------------------------
-
-            try:
-
-                block_frf = (
-                    FRFProcessor.calculate_frf(
-                        x=reference_signal,
-                        y=response_signal,
+            self._validate_acquisition_block(block, count)
+            sample_rate = float(block.sample_rate)
+            if block.num_samples != acquisition.num_samples:
+                raise AcquisitionControllerError("A DAQ retornou um bloco com tamanho diferente do configurado.")
+            for position, index in response_channel_indices.items():
+                try:
+                    pair = FRFProcessor.calculate_frf(
+                        x=block.data[:, reference_channel_index],
+                        y=block.data[:, index],
                         sample_rate=sample_rate,
-                        window_type=(
-                            acquisition_config.window
-                        ),
-                        nperseg=(
-                            acquisition_config
-                            .num_samples
-                        ),
-                        overlap=0.0,
-                        estimator=(
-                            acquisition_config
-                            .frf_estimator
-                        ),
+                        window_type=acquisition.window,
+                        nperseg=acquisition.num_samples,
+                        overlap=0.0, estimator=acquisition.frf_estimator,
                         coherence_threshold=0.0,
                     )
+                except SignalProcessingError as exc:
+                    raise AcquisitionControllerError("Erro no processamento espectral.") from exc
+                if frequency is None:
+                    frequency = pair.frequency.copy()
+                elif not np.array_equal(frequency, pair.frequency):
+                    raise AcquisitionControllerError("O vetor de frequência mudou entre as médias ou canais.")
+                if position not in sums:
+                    sums[position] = [
+                        np.zeros_like(pair.Gxx), np.zeros_like(pair.Gyy),
+                        np.zeros_like(pair.Gxy),
+                    ]
+                for accumulator, spectrum in zip(sums[position], (pair.Gxx, pair.Gyy, pair.Gxy)):
+                    accumulator += spectrum
+                gxx, gyy, gxy = sums[position]
+                frfs[position] = self._calculate_averaged_frf(
+                    frequency=frequency.copy(),
+                    Gxx=gxx / current, Gyy=gyy / current, Gxy=gxy / current,
                 )
-
-            except SignalProcessingError as exc:
-
-                raise AcquisitionControllerError(
-                    "Erro no processamento "
-                    "espectral."
-                ) from exc
-
-            # ------------------------------------------------
-            # Primeiro bloco
-            # ------------------------------------------------
-
-            if Gxx_sum is None:
-
-                frequency = (
-                    block_frf
-                    .frequency
-                    .copy()
-                )
-
-                Gxx_sum = np.zeros_like(
-                    block_frf.Gxx,
-                    dtype=np.float64,
-                )
-
-                Gyy_sum = np.zeros_like(
-                    block_frf.Gyy,
-                    dtype=np.float64,
-                )
-
-                Gxy_sum = np.zeros_like(
-                    block_frf.Gxy,
-                    dtype=np.complex128,
-                )
-
-            # ------------------------------------------------
-            # Confere vetor de frequência
-            # ------------------------------------------------
-
-            else:
-
-                if not np.array_equal(
-                    frequency,
-                    block_frf.frequency,
-                ):
-
-                    raise AcquisitionControllerError(
-                        "O vetor de frequência mudou "
-                        "entre as médias."
-                    )
-
-            # ------------------------------------------------
-            # Acumulação espectral
-            # ------------------------------------------------
-
-            Gxx_sum += block_frf.Gxx
-
-            Gyy_sum += block_frf.Gyy
-
-            Gxy_sum += block_frf.Gxy
-
-            # ------------------------------------------------
-            # Métricas temporais de TODOS os canais
-            # ------------------------------------------------
 
             self._accumulate_channel_metrics(
-                acquisition_data=(
-                    acquisition_data
-                ),
-                sum_square=sum_square,
-                total_samples=total_samples,
-                peak_values=peak_values,
-                clipping_detected=(
-                    clipping_detected
-                ),
-                max_clipping_ratio=(
-                    max_clipping_ratio
-                ),
+                acquisition_data=block, sum_square=sum_square,
+                total_samples=total_samples, peak_values=peak_values,
+                clipping_detected=clipping_detected,
+                max_clipping_ratio=max_clipping_ratio,
             )
-
-            completed_averages += 1
-
-            # A interface recebe a FRF calculada a partir dos
-            # espectros acumulados até a média atual.
             if frf_update_callback is not None:
-
-                partial_frf = (
-                    self._calculate_averaged_frf(
-                        frequency=frequency,
-                        Gxx=(
-                            Gxx_sum
-                            / completed_averages
-                        ),
-                        Gyy=(
-                            Gyy_sum
-                            / completed_averages
-                        ),
-                        Gxy=(
-                            Gxy_sum
-                            / completed_averages
-                        ),
-                    )
-                )
-
-                frf_update_callback(
-                    partial_frf,
-                    completed_averages,
-                    number_averages,
-                )
-
-            # ------------------------------------------------
-            # Progresso
-            # ------------------------------------------------
-
+                # Dicionário novo: nenhum callback recebe acumuladores mutáveis.
+                frf_update_callback(dict(frfs), current, number_averages)
             if progress_callback is not None:
+                progress_callback(current, number_averages)
 
-                progress_callback(
-                    completed_averages,
-                    number_averages,
-                )
-
-        # ====================================================
-        # FIM DAS MÉDIAS
-        # ====================================================
-
-        total_measurement_time = (
-            monotonic() - start_time
+        self._check_cancelled()
+        duration = monotonic() - start_time
+        metrics = self._finalize_channel_metrics(
+            sum_square=sum_square, total_samples=total_samples,
+            peak_values=peak_values, clipping_detected=clipping_detected,
+            max_clipping_ratio=max_clipping_ratio,
         )
-
-        if completed_averages == 0:
-
-            raise AcquisitionControllerError(
-                "Nenhuma média foi adquirida."
+        measurements = {}
+        for position, frf in frfs.items():
+            quality = self._evaluate_quality(frf, metrics, number_averages)
+            measurements[position] = FRFMeasurementResult(
+                frf=frf, requested_averages=number_averages,
+                completed_averages=number_averages, sample_rate=sample_rate,
+                num_samples_per_block=acquisition.num_samples,
+                block_duration=acquisition.num_samples / sample_rate,
+                total_measurement_time=duration, channel_metrics=metrics, quality=quality,
             )
-
-        # ----------------------------------------------------
-        # Médias dos espectros
-        # ----------------------------------------------------
-
-        Gxx = (
-            Gxx_sum
-            / completed_averages
-        )
-
-        Gyy = (
-            Gyy_sum
-            / completed_averages
-        )
-
-        Gxy = (
-            Gxy_sum
-            / completed_averages
-        )
-
-        # ----------------------------------------------------
-        # FRF e coerência a partir dos
-        # espectros MÉDIOS
-        # ----------------------------------------------------
-
-        frf = self._calculate_averaged_frf(
-            frequency=frequency,
-            Gxx=Gxx,
-            Gyy=Gyy,
-            Gxy=Gxy,
-        )
-
-        # ----------------------------------------------------
-        # Métricas temporais
-        # ----------------------------------------------------
-
-        channel_metrics = (
-            self._finalize_channel_metrics(
-                sum_square=sum_square,
-                total_samples=total_samples,
-                peak_values=peak_values,
-                clipping_detected=(
-                    clipping_detected
-                ),
-                max_clipping_ratio=(
-                    max_clipping_ratio
-                ),
-            )
-        )
-
-        # ----------------------------------------------------
-        # Qualidade
-        # ----------------------------------------------------
-
-        quality = (
-            self._evaluate_quality(
-                frf=frf,
-                channel_metrics=(
-                    channel_metrics
-                ),
-                completed_averages=(
-                    completed_averages
-                ),
-            )
-        )
-
+        quality = self._combine_quality(measurements)
         if message_callback is not None:
+            message_callback(f"Medição concluída: {quality.status.value}")
+        return MultiFRFMeasurementResult(measurements=measurements, quality=quality)
 
-            message_callback(
-                f"Medição concluída: "
-                f"{quality.status.value}"
-            )
-
-        return FRFMeasurementResult(
-            frf=frf,
-            requested_averages=(
-                number_averages
-            ),
-            completed_averages=(
-                completed_averages
-            ),
-            sample_rate=(
-                self.daq.actual_sample_rate
-                or
-                self.config
-                .acquisition
-                .sample_rate
-            ),
-            num_samples_per_block=(
-                acquisition_config
-                .num_samples
-            ),
-            block_duration=(
-                acquisition_config
-                .num_samples
-                /
-                (
-                    self.daq.actual_sample_rate
-                    or
-                    acquisition_config
-                    .sample_rate
-                )
-            ),
-            total_measurement_time=(
-                total_measurement_time
-            ),
-            channel_metrics=(
-                channel_metrics
-            ),
-            quality=quality,
+    @staticmethod
+    def _combine_quality(measurements: dict[int, FRFMeasurementResult]) -> MeasurementQualityReport:
+        """A pior FRF governa a revisão; pontos válidos são a interseção dos pares."""
+        first = next(iter(measurements.values()))
+        reports = [measurement.quality for measurement in measurements.values()]
+        band = (
+            (first.frf.frequency >= first.quality.valid_frequency_min)
+            & (first.frf.frequency <= first.quality.valid_frequency_max)
+        )
+        valid = np.logical_and.reduce([
+            np.isfinite(measurement.frf.coherence)
+            & (measurement.frf.coherence >= measurement.quality.coherence_threshold)
+            for measurement in measurements.values()
+        ])
+        warnings = [
+            f"H3{position}: {warning}"
+            for position, measurement in measurements.items()
+            for warning in measurement.quality.warnings
+        ]
+        return MeasurementQualityReport(
+            status=MeasurementQualityStatus.REVIEW if warnings else MeasurementQualityStatus.VALID,
+            coherence_threshold=first.quality.coherence_threshold,
+            valid_frequency_min=first.quality.valid_frequency_min,
+            valid_frequency_max=first.quality.valid_frequency_max,
+            coherence_mean=min(report.coherence_mean for report in reports),
+            coherence_min=min(report.coherence_min for report in reports),
+            coherence_valid_percentage=float(100 * np.mean(valid[band])),
+            clipping_detected=any(report.clipping_detected for report in reports),
+            warnings=warnings,
         )
 
     # ========================================================

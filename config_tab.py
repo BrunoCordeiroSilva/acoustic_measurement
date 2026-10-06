@@ -34,18 +34,15 @@ def calculate_valid_range_preview(
     )
 
 
-def populate_channel_combos(reference_combo, mobile_combo, channels) -> None:
-    """Reconstrói os seletores de canal para o dispositivo ativo."""
-
-    with QSignalBlocker(reference_combo), QSignalBlocker(mobile_combo):
-        reference_combo.clear()
-        mobile_combo.clear()
-        for channel in channels:
-            reference_combo.addItem(channel)
-            mobile_combo.addItem(channel)
-        if channels:
-            reference_combo.setCurrentIndex(0)
-            mobile_combo.setCurrentIndex(min(1, len(channels) - 1))
+def populate_channel_combos(combos: dict, channels) -> None:
+    """Preserva a referência antiga em ai0 e permite remapeamento explícito."""
+    default_indices = {1: 1, 2: 2, 3: 0, 4: 3}
+    for position, combo in combos.items():
+        with QSignalBlocker(combo):
+            combo.clear()
+            combo.addItems(channels)
+            index = default_indices[position]
+            combo.setCurrentIndex(index if len(channels) > index else -1)
 
 
 def populate_device_combo(device_combo, devices) -> str:

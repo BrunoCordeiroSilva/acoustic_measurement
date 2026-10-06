@@ -164,7 +164,7 @@ class ResultsActionsMixin:
 
         dialog = FRFFileSelectionDialog(
             self,
-            TransmissionLossExperiment.MEASUREMENT_SEQUENCE,
+            TransmissionLossExperiment.FRF_SEQUENCE,
         )
 
         if dialog.exec() != QDialog.Accepted:
@@ -532,7 +532,7 @@ class ResultsActionsMixin:
 
         self.last_measurement = None
 
-        self.displayed_measurement_frf = None
+        self.displayed_measurement_frfs = None
 
         self.coherence_frozen_to_measurement = False
 

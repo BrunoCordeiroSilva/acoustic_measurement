@@ -193,10 +193,10 @@ class MainWindow(
         self.last_monitoring_data = None
 
         # Antes da primeira medição oficial, a coerência vem do
-        # monitor. Depois, ela representa a última FRF medida.
+        # monitor. Depois, ela representa a três FRFs da última carga medida.
         self.coherence_frozen_to_measurement = False
 
-        self.displayed_measurement_frf = None
+        self.displayed_measurement_frfs = None
 
         self.tl_result = None
 

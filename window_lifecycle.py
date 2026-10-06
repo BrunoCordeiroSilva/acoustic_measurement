@@ -1,6 +1,7 @@
 """Atualização de controles e encerramento seguro da janela."""
 
 from experiments.transmission_loss import TLExperimentState
+from acquisition_controller import MeasurementQualityStatus
 
 class WindowLifecycleMixin:
     def _update_controls(self):
@@ -154,13 +155,16 @@ class WindowLifecycleMixin:
         # CONFIGURAÇÃO
         # ====================================================
 
-        self.apply_config_button.setEnabled(
-            not acquisition_busy
+        # Não misturar geometria/canais/sensibilidades entre as duas cargas.
+        configuration_locked = bool(
+            self.experiment.measurements or self.experiment.pending_measurement
         )
-
-        self.refresh_daq_button.setEnabled(
-            not acquisition_busy
-        )
+        configuration_enabled = not acquisition_busy and not configuration_locked
+        self.start_experiment_button.setEnabled(configuration_enabled)
+        self.apply_config_button.setEnabled(configuration_enabled)
+        self.refresh_daq_button.setEnabled(configuration_enabled)
+        for group in self.config_groups:
+            group.setEnabled(configuration_enabled)
 
     # ========================================================
     # FECHAMENTO

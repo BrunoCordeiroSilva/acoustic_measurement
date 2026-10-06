@@ -6,7 +6,7 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication, QMessageBox
 from monitoring import *
 from plot_widgets import PlotPopup
-from ui_constants import COHERENCE_COLOR, MOBILE_COLOR, REFERENCE_COLOR
+from microphone_plots import create_microphone_curves, set_microphone_curves, spectra_from_frfs
 
 class MonitoringActionsMixin:
     def _set_status_banner(
@@ -118,87 +118,16 @@ class MonitoringActionsMixin:
             units="Hz",
         )
 
-        popup.legend = popup.plot.addLegend()
-
-        popup.legend.anchor(
-            itemPos=(0, 1),
-            parentPos=(0, 1),
-            offset=(10, -10),
-        )
-
-        popup.reference_curve = (
-            popup.plot.plot(
-                [],
-                [],
-                name="Referência - P3",
-                pen=pg.mkPen(
-                    REFERENCE_COLOR,
-                    width=2,
-                ),
-            )
-        )
-
-        popup.mobile_curve = (
-            popup.plot.plot(
-                [],
-                [],
-                name="Móvel",
-                pen=pg.mkPen(
-                    MOBILE_COLOR,
-                    width=2,
-                ),
-            )
-        )
-
-        # ====================================================
-        # PRIORIDADE: MONITOR AO VIVO
-        # ====================================================
-
-        if self.last_monitoring_data is not None:
-
+        popup.curves = create_microphone_curves(popup.plot)
+        if self.measurement_in_progress and self.displayed_measurement_frfs is not None:
+            frequency, spectra = spectra_from_frfs(self.displayed_measurement_frfs)
+            set_microphone_curves(popup.curves, frequency, spectra)
+        elif self.last_monitoring_data is not None:
             data = self.last_monitoring_data
-
-            popup.reference_curve.setData(
-                data.frequency,
-                data.reference_spectrum,
-            )
-
-            popup.mobile_curve.setData(
-                data.frequency,
-                data.mobile_spectrum,
-            )
-
-        # ====================================================
-        # FALLBACK: ÚLTIMA MEDIÇÃO OFICIAL
-        # ====================================================
-
-        elif self.last_measurement is not None:
-
-            result = self.last_measurement
-
-            reference_spectrum = np.sqrt(
-                np.maximum(
-                    result.frf.Gxx,
-                    0.0,
-                )
-            )
-
-            mobile_spectrum = np.sqrt(
-                np.maximum(
-                    result.frf.Gyy,
-                    0.0,
-                )
-            )
-
-            popup.reference_curve.setData(
-                result.frf.frequency,
-                reference_spectrum,
-            )
-
-            popup.mobile_curve.setData(
-                result.frf.frequency,
-                mobile_spectrum,
-            )
+            set_microphone_curves(popup.curves, data.frequency, data.spectra)
+        elif self.displayed_measurement_frfs is not None:
+            frequency, spectra = spectra_from_frfs(self.displayed_measurement_frfs)
+            set_microphone_curves(popup.curves, frequency, spectra)
 
         self.spectrum_popup = popup
 
@@ -253,54 +182,17 @@ class MonitoringActionsMixin:
             1.05,
         )
 
-        popup.coherence_curve = (
-            popup.plot.plot(
-                [],
-                [],
-                pen=pg.mkPen(
-                    COHERENCE_COLOR,
-                    width=2,
-                ),
+        popup.curves = create_microphone_curves(popup.plot, coherence=True)
+        if self.coherence_frozen_to_measurement and self.displayed_measurement_frfs is not None:
+            frfs = self.displayed_measurement_frfs
+            frequency = next(iter(frfs.values())).frequency
+            set_microphone_curves(
+                popup.curves, frequency,
+                {position: frf.coherence for position, frf in frfs.items()},
             )
-        )
-
-        # ====================================================
-        # PRIORIDADE: ÚLTIMA MEDIÇÃO OFICIAL
-        # ====================================================
-
-        if (
-            self.coherence_frozen_to_measurement
-            and self.displayed_measurement_frf is not None
-        ):
-
-            popup.coherence_curve.setData(
-                self.displayed_measurement_frf.frequency,
-                self.displayed_measurement_frf.coherence,
-            )
-
-        # ====================================================
-        # FALLBACK: MONITOR
-        # ====================================================
-
         elif self.last_monitoring_data is not None:
-
             data = self.last_monitoring_data
-
-            popup.coherence_curve.setData(
-                data.coherence_frequency,
-                data.coherence,
-            )
-
-        # ====================================================
-        # FALLBACK
-        # ====================================================
-
-        elif self.last_measurement is not None:
-
-            popup.coherence_curve.setData(
-                self.last_measurement.frf.frequency,
-                self.last_measurement.frf.coherence,
-            )
+            set_microphone_curves(popup.curves, data.coherence_frequency, data.coherences)
 
         self.coherence_popup = popup
 

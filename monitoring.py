@@ -1,6 +1,7 @@
 """Contratos e componentes compartilhados do monitoramento contínuo."""
 
 from dataclasses import dataclass
+from microphone_plots import set_microphone_curves
 
 import numpy as np
 
@@ -14,10 +15,9 @@ class MonitoringData:
     """Pacote espectral mais recente produzido pelo monitoramento visual."""
 
     frequency: np.ndarray
-    reference_spectrum: np.ndarray
-    mobile_spectrum: np.ndarray
+    spectra: dict[int, np.ndarray]
     coherence_frequency: np.ndarray
-    coherence: np.ndarray
+    coherences: dict[int, np.ndarray]
     sample_rate: float
 
 
@@ -25,43 +25,29 @@ def update_monitoring_plots(window, data: MonitoringData) -> None:
     """Atualiza espectro e coerência, incluindo pop-ups visíveis."""
 
     window.last_monitoring_data = data
-    window.spectrum_reference_curve.setData(
-        data.frequency, data.reference_spectrum
-    )
-    window.spectrum_mobile_curve.setData(
-        data.frequency, data.mobile_spectrum
-    )
+    set_microphone_curves(window.spectrum_curves, data.frequency, data.spectra)
     if not window.coherence_frozen_to_measurement:
-        window.coherence_curve.setData(data.coherence_frequency, data.coherence)
+        set_microphone_curves(window.coherence_curves, data.coherence_frequency, data.coherences)
     if window.spectrum_popup is not None and window.spectrum_popup.isVisible():
-        window.spectrum_popup.reference_curve.setData(
-            data.frequency, data.reference_spectrum
-        )
-        window.spectrum_popup.mobile_curve.setData(
-            data.frequency, data.mobile_spectrum
-        )
+        set_microphone_curves(window.spectrum_popup.curves, data.frequency, data.spectra)
     if (
         not window.coherence_frozen_to_measurement
         and window.coherence_popup is not None
         and window.coherence_popup.isVisible()
     ):
-        window.coherence_popup.coherence_curve.setData(
-            data.coherence_frequency, data.coherence
-        )
+        set_microphone_curves(window.coherence_popup.curves, data.coherence_frequency, data.coherences)
 
 
 def clear_monitoring_plots(window) -> None:
     """Limpa os dados visuais do monitor sem afetar resultados de TL."""
-
     window.last_monitoring_data = None
-    window.spectrum_reference_curve.setData([], [])
-    window.spectrum_mobile_curve.setData([], [])
-    window.coherence_curve.setData([], [])
-    if window.spectrum_popup is not None:
-        window.spectrum_popup.reference_curve.setData([], [])
-        window.spectrum_popup.mobile_curve.setData([], [])
-    if window.coherence_popup is not None:
-        window.coherence_popup.coherence_curve.setData([], [])
+    groups = [window.spectrum_curves, window.coherence_curves]
+    for popup in (window.spectrum_popup, window.coherence_popup):
+        if popup is not None:
+            groups.append(popup.curves)
+    for curves in groups:
+        for curve in curves.values():
+            curve.setData([], [])
 
 
 def stop_monitoring_session(window, wait: bool = False) -> bool:
@@ -90,7 +76,9 @@ def start_monitoring_session(window) -> None:
         return
     if window.monitoring_thread is not None and window.monitoring_thread.isRunning():
         return
-    if len([channel for channel in window.config.channels if channel.enabled]) < 2:
+    try:
+        window.config.tl_channel_indices()
+    except ValueError:
         return
 
     # Importação tardia evita ciclo: o worker também consome MonitoringData.

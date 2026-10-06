@@ -194,110 +194,27 @@ def build_config_tab(window):
             QSizePolicy.Policy.Preferred,
         )
 
-        window.reference_channel_combo = QComboBox()
-
-        window.mobile_channel_combo = QComboBox()
-
-        for combo in (
-            window.reference_channel_combo,
-            window.mobile_channel_combo,
-        ):
-
-            combo.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Fixed,
-            )
-
-        window.reference_sensitivity_input = (
-            QDoubleSpinBox()
-        )
-
-        window.mobile_sensitivity_input = (
-            QDoubleSpinBox()
-        )
-
-        for spinbox in (
-            window.reference_sensitivity_input,
-            window.mobile_sensitivity_input,
-        ):
-
-            spinbox.setRange(
-                0.001,
-                1000.0,
-            )
-
+        window.microphone_channel_combos = {}
+        window.microphone_sensitivity_inputs = {}
+        microphone_layout.addWidget(QLabel("Posição"), 0, 0)
+        microphone_layout.addWidget(QLabel("Canal"), 0, 1)
+        microphone_layout.addWidget(QLabel("Sensibilidade"), 0, 2)
+        for position in (1, 2, 3, 4):
+            combo = QComboBox()
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            spinbox = QDoubleSpinBox()
+            spinbox.setRange(0.001, 1000.0)
             spinbox.setDecimals(4)
-
             spinbox.setValue(50.0)
-
-            spinbox.setSuffix(
-                " mV/Pa"
-            )
-
-            spinbox.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Fixed,
-            )
-
-        reference_microphone_label = QLabel(
-            "Referência - P3"
-        )
-
-        reference_microphone_label.setWordWrap(True)
-
-        microphone_layout.addWidget(
-            QLabel(""),
-            0,
-            0,
-        )
-
-        microphone_layout.addWidget(
-            QLabel("Canal"),
-            0,
-            1,
-        )
-
-        microphone_layout.addWidget(
-            QLabel("Sensibilidade"),
-            0,
-            2,
-        )
-
-        microphone_layout.addWidget(
-            reference_microphone_label,
-            1,
-            0,
-        )
-
-        microphone_layout.addWidget(
-            window.reference_channel_combo,
-            1,
-            1,
-        )
-
-        microphone_layout.addWidget(
-            window.reference_sensitivity_input,
-            1,
-            2,
-        )
-
-        microphone_layout.addWidget(
-            QLabel("Móvel"),
-            2,
-            0,
-        )
-
-        microphone_layout.addWidget(
-            window.mobile_channel_combo,
-            2,
-            1,
-        )
-
-        microphone_layout.addWidget(
-            window.mobile_sensitivity_input,
-            2,
-            2,
-        )
+            spinbox.setSuffix(" mV/Pa")
+            spinbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            label = QLabel(f"P{position}" + (" (referência)" if position == 3 else ""))
+            label.setWordWrap(True)
+            microphone_layout.addWidget(label, position, 0)
+            microphone_layout.addWidget(combo, position, 1)
+            microphone_layout.addWidget(spinbox, position, 2)
+            window.microphone_channel_combos[position] = combo
+            window.microphone_sensitivity_inputs[position] = spinbox
 
         microphone_layout.setColumnStretch(1, 1)
         microphone_layout.setColumnStretch(2, 1)
@@ -771,7 +688,7 @@ def build_config_tab(window):
         )
 
         # Cada dispositivo possui seus próprios canais físicos. Sem esta
-        # conexão, os combos de referência e móvel continuavam mostrando os
+        # conexão, os combos de P1–P4 continuariam mostrando os
         # canais do primeiro dispositivo detectado.
         window.device_combo.currentTextChanged.connect(
             window._device_selection_changed

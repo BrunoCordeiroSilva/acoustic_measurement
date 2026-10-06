@@ -1,7 +1,7 @@
 """Construção visual da aba Ensaio."""
 
 import pyqtgraph as pg
-from ui_constants import COHERENCE_COLOR, MOBILE_COLOR, REFERENCE_COLOR
+from microphone_plots import create_microphone_curves
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import *
 
@@ -33,7 +33,7 @@ def build_experiment_tab(window):
         # ====================================================
 
         quality_group = QGroupBox(
-            "Qualidade da última medição"
+            "Qualidade da última carga"
         )
 
         quality_group.setMinimumWidth(300)
@@ -62,6 +62,9 @@ def build_experiment_tab(window):
         window.valid_points_label = QLabel("-")
 
         window.clipping_label = QLabel("-")
+        window.coherence_mean_label.setToolTip("Menor coerência média entre H31, H32 e H34 na banda válida.")
+        window.coherence_min_label.setToolTip("Menor coerência entre todos os pares na banda válida.")
+        window.clipping_label.setToolTip("Avaliado nos quatro microfones simultaneamente.")
 
         quality_layout.addRow(
             "Status:",
@@ -69,7 +72,7 @@ def build_experiment_tab(window):
         )
 
         quality_layout.addRow(
-            "Coerência média:",
+            "Menor média (3 FRFs):",
             window.coherence_mean_label,
         )
 
@@ -79,7 +82,7 @@ def build_experiment_tab(window):
         )
 
         quality_layout.addRow(
-            "Pontos válidos:",
+            "Válidos nas 3 FRFs:",
             window.valid_points_label,
         )
 
@@ -232,39 +235,7 @@ def build_experiment_tab(window):
             y=True,
         )
 
-        window.spectrum_legend = (
-            window.spectrum_plot.addLegend()
-        )
-
-        window.spectrum_legend.anchor(
-            itemPos=(0, 1),
-            parentPos=(0, 1),
-            offset=(10, -10),
-        )
-
-        window.spectrum_reference_curve = (
-            window.spectrum_plot.plot(
-                [],
-                [],
-                name="Referência - P3",
-                pen=pg.mkPen(
-                    REFERENCE_COLOR,
-                    width=2,
-                ),
-            )
-        )
-
-        window.spectrum_mobile_curve = (
-            window.spectrum_plot.plot(
-                [],
-                [],
-                name="Móvel",
-                pen=pg.mkPen(
-                    MOBILE_COLOR,
-                    width=2,
-                ),
-            )
-        )
+        window.spectrum_curves = create_microphone_curves(window.spectrum_plot)
 
         spectrum_panel = (
             window._create_plot_panel(
@@ -313,16 +284,7 @@ def build_experiment_tab(window):
             y=True,
         )
 
-        window.coherence_curve = (
-            window.coherence_plot.plot(
-                [],
-                [],
-                pen=pg.mkPen(
-                    COHERENCE_COLOR,
-                    width=2,
-                ),
-            )
-        )
+        window.coherence_curves = create_microphone_curves(window.coherence_plot, coherence=True)
 
         coherence_panel = (
             window._create_plot_panel(

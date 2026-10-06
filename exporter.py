@@ -453,6 +453,8 @@ class DataExporter:
                     "max_voltage":
                         channel.max_voltage,
 
+                    "microphone_position": channel.microphone_position,
+
                     "iepe_enabled":
                         channel.iepe_enabled,
 
@@ -538,8 +540,12 @@ class DataExporter:
                 "reference_position":
                     tl.reference_position,
 
-                "mobile_positions":
-                    tl.mobile_positions,
+                "response_positions":
+                    tl.response_positions,
+
+                "acquisition_mode": "four_static_microphones",
+                "acquisitions_per_load": 1,
+                "load_count": 2,
 
                 "load_A":
                     tl.load_a_name,

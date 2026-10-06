@@ -6,12 +6,21 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication, QMessageBox
 from acquisition_worker import MeasurementWorker
 from acquisition_controller import MeasurementQualityStatus
-from experiment_tab import format_quality_values
+from experiment_tab import format_quality_values, clear_quality_labels
 from experiments.transmission_loss import TransmissionLossError, TLExperimentState, MeasurementAcceptance
-from ui_constants import COHERENCE_COLOR, MOBILE_COLOR, REFERENCE_COLOR
+from microphone_plots import render_measurement_frfs
 
 class ExperimentActionsMixin:
     def start_experiment(self):
+
+        if self.measurement_in_progress or self.measurement_waiting_for_monitor:
+            return
+        if self.experiment.measurements or self.experiment.pending_measurement is not None:
+            QMessageBox.warning(
+                self, "Ensaio em andamento",
+                "Utilize Refazer ensaio ou Novo ensaio/Modelo para descartar a sequência atual.",
+            )
+            return
 
         # Se o monitor já estiver rodando,
         # não precisamos reaplicar tudo.
@@ -35,7 +44,7 @@ class ExperimentActionsMixin:
 
             self.coherence_frozen_to_measurement = False
 
-            self.displayed_measurement_frf = None
+            self.displayed_measurement_frfs = None
 
             self.tl_result = None
 
@@ -281,71 +290,7 @@ class ExperimentActionsMixin:
         estes dados são exclusivamente da aquisição oficial.
         """
 
-        reference_spectrum = np.sqrt(
-            np.maximum(
-                frf.Gxx,
-                0.0,
-            )
-        )
-
-        mobile_spectrum = np.sqrt(
-            np.maximum(
-                frf.Gyy,
-                0.0,
-            )
-        )
-
-        self.spectrum_reference_curve.setData(
-            frf.frequency,
-            reference_spectrum,
-        )
-
-        self.spectrum_mobile_curve.setData(
-            frf.frequency,
-            mobile_spectrum,
-        )
-
-        self.coherence_curve.setData(
-            frf.frequency,
-            frf.coherence,
-        )
-
-        self.fit_spectrum_plot()
-
-        self.fit_coherence_plot()
-
-        self.coherence_frozen_to_measurement = True
-
-        self.displayed_measurement_frf = frf
-
-        if (
-            self.spectrum_popup is not None
-            and self.spectrum_popup.isVisible()
-        ):
-
-            self.spectrum_popup.reference_curve.setData(
-                frf.frequency,
-                reference_spectrum,
-            )
-
-            self.spectrum_popup.mobile_curve.setData(
-                frf.frequency,
-                mobile_spectrum,
-            )
-
-            self.spectrum_popup.plot.getViewBox().autoRange()
-
-        if (
-            self.coherence_popup is not None
-            and self.coherence_popup.isVisible()
-        ):
-
-            self.coherence_popup.coherence_curve.setData(
-                frf.frequency,
-                frf.coherence,
-            )
-
-            self.coherence_popup.plot.getViewBox().autoRange()
+        render_measurement_frfs(self, frf)
 
     # ========================================================
     # MEDIÇÃO FINALIZADA
@@ -360,7 +305,7 @@ class ExperimentActionsMixin:
 
         self.coherence_frozen_to_measurement = True
 
-        self.displayed_measurement_frf = result.frf
+        self.displayed_measurement_frfs = result.frfs
 
         self._show_measurement_result(
             result
@@ -501,77 +446,7 @@ class ExperimentActionsMixin:
         # ESPECTRO DA MEDIÇÃO
         # ====================================================
 
-        reference_spectrum = np.sqrt(
-            np.maximum(
-                result.frf.Gxx,
-                0.0,
-            )
-        )
-
-        mobile_spectrum = np.sqrt(
-            np.maximum(
-                result.frf.Gyy,
-                0.0,
-            )
-        )
-
-        self.spectrum_reference_curve.setData(
-            result.frf.frequency,
-            reference_spectrum,
-        )
-
-        self.spectrum_mobile_curve.setData(
-            result.frf.frequency,
-            mobile_spectrum,
-        )
-
-        # ====================================================
-        # COERÊNCIA OFICIAL
-        # ====================================================
-
-        self.coherence_curve.setData(
-            result.frf.frequency,
-            result.frf.coherence,
-        )
-
-        # ====================================================
-        # POP-UP ESPECTRO
-        # ====================================================
-
-        if (
-            self.spectrum_popup is not None
-            and
-            self.spectrum_popup.isVisible()
-        ):
-
-            self.spectrum_popup.reference_curve.setData(
-                result.frf.frequency,
-                reference_spectrum,
-            )
-
-            self.spectrum_popup.mobile_curve.setData(
-                result.frf.frequency,
-                mobile_spectrum,
-            )
-
-        # ====================================================
-        # POP-UP COERÊNCIA
-        # ====================================================
-
-        if (
-            self.coherence_popup is not None
-            and
-            self.coherence_popup.isVisible()
-        ):
-
-            self.coherence_popup.coherence_curve.setData(
-                result.frf.frequency,
-                result.frf.coherence,
-            )
-
-        self.fit_spectrum_plot()
-
-        self.fit_coherence_plot()
+        render_measurement_frfs(self, result.frfs)
 
     # ========================================================
     # FIT
@@ -713,7 +588,7 @@ class ExperimentActionsMixin:
         ):
 
             self._set_status_banner(
-                "✓ SEIS MEDIÇÕES CONCLUÍDAS",
+                "✓ DUAS CARGAS MEDIDAS — SEIS FRFs OBTIDAS",
                 "success",
             )
 
@@ -782,7 +657,7 @@ class ExperimentActionsMixin:
             "Refazer ensaio",
             "Todas as medições já realizadas serão "
             "descartadas.\n\n"
-            "Deseja refazer o ensaio desde H31_A?",
+            "Deseja refazer o ensaio desde a carga A?",
             QMessageBox.Yes
             |
             QMessageBox.No,
@@ -798,7 +673,7 @@ class ExperimentActionsMixin:
 
         self.coherence_frozen_to_measurement = False
 
-        self.displayed_measurement_frf = None
+        self.displayed_measurement_frfs = None
 
         self.tl_result = None
 
@@ -828,7 +703,7 @@ class ExperimentActionsMixin:
         )
 
         self._set_status_banner(
-            "ENSAIO REINICIADO — PRONTO PARA H31_A",
+            "ENSAIO REINICIADO — PRONTO PARA CARGA A",
             "success",
         )
 

@@ -874,7 +874,7 @@ class FRFProcessor:
             x = microfone fixo
                 posição 3
 
-            y = microfone móvel
+            y = microfone fixo de resposta
                 posição 1, 2 ou 4
 
         Assim:

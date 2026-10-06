@@ -348,6 +348,7 @@ class MonitoringWorker(QObject):
 
                 self.daq.connect()
 
+            indices = self.config.tl_channel_indices()
             self.daq.configure(
                 channels=self.config.channels,
                 acquisition=monitor_acquisition,
@@ -373,120 +374,35 @@ class MonitoringWorker(QObject):
                     acquisition_data.data
                 )
 
-                # ---------------------------------------------
-                # Precisamos de dois canais
-                # ---------------------------------------------
-
-                if (
-                    data.ndim != 2
-                    or data.shape[1] < 2
-                ):
-
-                    raise RuntimeError(
-                        "O monitoramento necessita "
-                        "de pelo menos dois canais."
+                if data.ndim != 2 or data.shape[1] != 4 or data.shape[0] < 256:
+                    raise RuntimeError("O monitoramento necessita de quatro canais e pelo menos 256 pontos.")
+                if not np.all(np.isfinite(data)):
+                    raise RuntimeError("O monitoramento recebeu dados não finitos.")
+                sample_rate = float(acquisition_data.sample_rate)
+                spectra = {
+                    position: SignalProcessor.fft(
+                        x=data[:, index], sample_rate=sample_rate,
+                        window_type=monitor_acquisition.window, remove_dc=True,
                     )
-
-                sample_rate = float(
-                    acquisition_data.sample_rate
-                )
-
-                reference_signal = (
-                    data[:, 0].copy()
-                )
-
-                mobile_signal = (
-                    data[:, 1].copy()
-                )
-
-                # =================================================
-                # FFT
-                # =================================================
-
-                fft_reference = (
-                    SignalProcessor.fft(
-                        x=reference_signal,
-                        sample_rate=sample_rate,
-                        window_type=(
-                            monitor_acquisition.window
-                        ),
-                        remove_dc=True,
-                    )
-                )
-
-                fft_mobile = (
-                    SignalProcessor.fft(
-                        x=mobile_signal,
-                        sample_rate=sample_rate,
-                        window_type=(
-                            monitor_acquisition.window
-                        ),
-                        remove_dc=True,
-                    )
-                )
-
-                # =================================================
-                # COERÊNCIA
-                #
-                # Aqui usamos vários segmentos dentro de cada
-                # bloco. Isso é diferente da medição oficial.
-                # =================================================
-
-                nperseg = min(
-                    self.coherence_nperseg,
-                    reference_signal.size,
-                )
-
-                # Evita tamanho muito pequeno.
-
-                nperseg = max(
-                    128,
-                    nperseg,
-                )
-
-                frf_monitor = (
-                    FRFProcessor.calculate_frf(
-                        x=reference_signal,
-                        y=mobile_signal,
-                        sample_rate=sample_rate,
-                        window_type=(
-                            monitor_acquisition.window
-                        ),
-                        nperseg=nperseg,
-                        overlap=0.50,
-                        estimator=(
-                            monitor_acquisition
-                            .frf_estimator
-                        ),
+                    for position, index in indices.items()
+                }
+                # Ao menos dois segmentos: um segmento produz coerência trivial (= 1).
+                nperseg = min(self.coherence_nperseg, data.shape[0] // 2)
+                frfs = {
+                    position: FRFProcessor.calculate_frf(
+                        x=data[:, indices[3]], y=data[:, indices[position]],
+                        sample_rate=sample_rate, window_type=monitor_acquisition.window,
+                        nperseg=nperseg, overlap=0.50,
+                        estimator=monitor_acquisition.frf_estimator,
                         coherence_threshold=0.0,
                     )
-                )
-
-                # =================================================
-                # ENVIA PARA GUI
-                # =================================================
-
+                    for position in (1, 2, 4)
+                }
                 monitor_data = MonitoringData(
-                    frequency=(
-                        fft_reference.frequency
-                    ),
-
-                    reference_spectrum=(
-                        fft_reference.magnitude
-                    ),
-
-                    mobile_spectrum=(
-                        fft_mobile.magnitude
-                    ),
-
-                    coherence_frequency=(
-                        frf_monitor.frequency
-                    ),
-
-                    coherence=(
-                        frf_monitor.coherence
-                    ),
-
+                    frequency=spectra[3].frequency,
+                    spectra={position: fft.magnitude for position, fft in spectra.items()},
+                    coherence_frequency=frfs[1].frequency,
+                    coherences={position: frf.coherence for position, frf in frfs.items()},
                     sample_rate=sample_rate,
                 )
 

@@ -68,16 +68,14 @@ class ConfigActionsMixin:
             )
 
             populate_channel_combos(
-                self.reference_channel_combo,
-                self.mobile_channel_combo,
+                self.microphone_channel_combos,
                 channels,
             )
 
         except DAQError as error:
 
-            self.reference_channel_combo.clear()
-
-            self.mobile_channel_combo.clear()
+            for combo in self.microphone_channel_combos.values():
+                combo.clear()
 
             QMessageBox.critical(
                 self,
@@ -110,9 +108,8 @@ class ConfigActionsMixin:
 
                 self.device_combo.clear()
 
-                self.reference_channel_combo.clear()
-
-                self.mobile_channel_combo.clear()
+                for combo in self.microphone_channel_combos.values():
+                    combo.clear()
 
                 QMessageBox.warning(
                     self,
@@ -222,7 +219,15 @@ class ConfigActionsMixin:
 
         # Não permite alterar configuração
         # durante medição oficial.
-        if self.measurement_in_progress:
+        if self.experiment.measurements or self.experiment.pending_measurement is not None:
+            QMessageBox.warning(
+                self, "Configuração",
+                "Não altere a configuração entre as cargas. Refazer ensaio ou Novo ensaio/Modelo "
+                "libera os parâmetros para uma nova sequência.",
+            )
+            return False
+
+        if self.measurement_in_progress or self.measurement_waiting_for_monitor:
 
             QMessageBox.warning(
                 self,
@@ -256,32 +261,14 @@ class ConfigActionsMixin:
 
         try:
 
-            if (
-                self.reference_channel_combo.count()
-                == 0
-            ):
-
-                raise ValueError(
-                    "Nenhum canal foi selecionado."
-                )
-
-            reference_channel = (
-                self.reference_channel_combo.currentText()
-            )
-
-            mobile_channel = (
-                self.mobile_channel_combo.currentText()
-            )
-
-            if (
-                reference_channel
-                == mobile_channel
-            ):
-
-                raise ValueError(
-                    "Os microfones precisam utilizar "
-                    "canais físicos diferentes."
-                )
+            selected_channels = {
+                position: combo.currentText()
+                for position, combo in self.microphone_channel_combos.items()
+            }
+            if not all(selected_channels.values()):
+                raise ValueError("Selecione os quatro canais físicos para P1–P4.")
+            if len(set(selected_channels.values())) != 4:
+                raise ValueError("Os quatro microfones precisam utilizar canais físicos diferentes.")
 
             selected_device = (
                 self.device_combo.currentText()
@@ -365,44 +352,15 @@ class ConfigActionsMixin:
             # =================================================
 
             self.config.channels = [
-
                 ChannelConfig(
-                    physical_channel=(
-                        reference_channel
-                    ),
-                    name=(
-                        "Microfone referência - P3"
-                    ),
-                    sensor_type=(
-                        SensorType.MICROPHONE
-                    ),
-                    sensitivity_mv_pa=(
-                        self
-                        .reference_sensitivity_input
-                        .value()
-                    ),
-                    iepe_enabled=True,
-                    iepe_current_a=0.002,
-                ),
-
-                ChannelConfig(
-                    physical_channel=(
-                        mobile_channel
-                    ),
-                    name=(
-                        "Microfone móvel"
-                    ),
-                    sensor_type=(
-                        SensorType.MICROPHONE
-                    ),
-                    sensitivity_mv_pa=(
-                        self
-                        .mobile_sensitivity_input
-                        .value()
-                    ),
-                    iepe_enabled=True,
-                    iepe_current_a=0.002,
-                ),
+                    physical_channel=selected_channels[position],
+                    name=f"Microfone P{position}" + (" - referência" if position == 3 else ""),
+                    microphone_position=position,
+                    sensor_type=SensorType.MICROPHONE,
+                    sensitivity_mv_pa=self.microphone_sensitivity_inputs[position].value(),
+                    iepe_enabled=True, iepe_current_a=0.002,
+                )
+                for position in (1, 2, 3, 4)
             ]
 
             # =================================================

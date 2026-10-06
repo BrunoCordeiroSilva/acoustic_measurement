@@ -10,6 +10,7 @@ from acquisition_controller import (
     AcquisitionController,
     AcquisitionCancelled,
     FRFMeasurementResult,
+    MultiFRFMeasurementResult,
     MeasurementQualityStatus,
 )
 
@@ -33,6 +34,11 @@ class TransmissionLossError(RuntimeError):
 # ============================================================
 # ETAPAS DAS MEDIÇÕES
 # ============================================================
+
+class TLLoadStep(Enum):
+    LOAD_A = "Carga A"
+    LOAD_B = "Carga B"
+
 
 class TLMeasurementStep(Enum):
 
@@ -158,49 +164,18 @@ class TLResult:
 # ============================================================
 
 class TransmissionLossExperiment:
-    """
-    Gerencia o ensaio de perda de transmissão
-    pelo método das duas cargas.
+    """Método das duas cargas: uma aquisição simultânea de P1–P4 por carga."""
 
-    Sequência:
-
-        H31_A
-        H32_A
-        H34_A
-
-        TROCA DE CARGA
-
-        H31_B
-        H32_B
-        H34_B
-
-        ↓
-
-        A, B, C, D
-
-        ↓
-
-        TL(f)
-    """
-
-    # ========================================================
-    # ORDEM DAS MEDIÇÕES
-    # ========================================================
-
-    MEASUREMENT_SEQUENCE = [
-
-        TLMeasurementStep.H31_A,
-
-        TLMeasurementStep.H32_A,
-
-        TLMeasurementStep.H34_A,
-
-        TLMeasurementStep.H31_B,
-
-        TLMeasurementStep.H32_B,
-
-        TLMeasurementStep.H34_B,
-    ]
+    MEASUREMENT_SEQUENCE = [TLLoadStep.LOAD_A, TLLoadStep.LOAD_B]
+    FRF_SEQUENCE = list(TLMeasurementStep)
+    LOAD_FRF_STEPS = {
+        TLLoadStep.LOAD_A: {
+            1: TLMeasurementStep.H31_A, 2: TLMeasurementStep.H32_A, 4: TLMeasurementStep.H34_A,
+        },
+        TLLoadStep.LOAD_B: {
+            1: TLMeasurementStep.H31_B, 2: TLMeasurementStep.H32_B, 4: TLMeasurementStep.H34_B,
+        },
+    }
 
     # ========================================================
     # INICIALIZAÇÃO
@@ -228,7 +203,7 @@ class TransmissionLossExperiment:
         ] = {}
 
         self.pending_measurement: Optional[
-            FRFMeasurementResult
+            MultiFRFMeasurementResult
         ] = None
 
         self.result: Optional[
@@ -242,7 +217,7 @@ class TransmissionLossExperiment:
     @property
     def current_step(
         self,
-    ) -> Optional[TLMeasurementStep]:
+    ) -> Optional[TLLoadStep]:
 
         if (
             self.current_index
@@ -317,58 +292,16 @@ class TransmissionLossExperiment:
                 "Nenhuma medição pendente."
             )
 
-        instructions = {
-
-            TLMeasurementStep.H31_A:
-                (
-                    f"H31_A - {self.config.transmission_loss.load_a_name}: "
-                    "mantenha o microfone de referência "
-                    "na posição 3 e coloque o microfone "
-                    "móvel na posição 1."
-                ),
-
-            TLMeasurementStep.H32_A:
-                (
-                    f"H32_A - {self.config.transmission_loss.load_a_name}: "
-                    "mantenha o microfone de referência "
-                    "na posição 3 e mova o segundo "
-                    "microfone para a posição 2."
-                ),
-
-            TLMeasurementStep.H34_A:
-                (
-                    f"H34_A - {self.config.transmission_loss.load_a_name}: "
-                    "mantenha o microfone de referência "
-                    "na posição 3 e mova o segundo "
-                    "microfone para a posição 4."
-                ),
-
-            TLMeasurementStep.H31_B:
-                (
-                    f"H31_B - {self.config.transmission_loss.load_b_name}: "
-                    "mantenha o microfone de referência "
-                    "na posição 3 e coloque o microfone "
-                    "móvel na posição 1."
-                ),
-
-            TLMeasurementStep.H32_B:
-                (
-                    f"H32_B - {self.config.transmission_loss.load_b_name}: "
-                    "mantenha o microfone de referência "
-                    "na posição 3 e mova o segundo "
-                    "microfone para a posição 2."
-                ),
-
-            TLMeasurementStep.H34_B:
-                (
-                    f"H34_B - {self.config.transmission_loss.load_b_name}: "
-                    "mantenha o microfone de referência "
-                    "na posição 3 e mova o segundo "
-                    "microfone para a posição 4."
-                ),
-        }
-
-        return instructions[step]
+        load_name = (
+            self.config.transmission_loss.load_a_name
+            if step == TLLoadStep.LOAD_A else self.config.transmission_loss.load_b_name
+        )
+        if self.state == TLExperimentState.WAITING_LOAD_CHANGE:
+            return f"Troque a terminação para {load_name} e confirme a troca. Mantenha P1–P4 fixos."
+        return (
+            f"{load_name}: mantenha os quatro microfones fixos em P1, P2, P3 e P4. "
+            "Uma aquisição obtém H31, H32 e H34 simultaneamente, com P3 como referência."
+        )
 
     # ========================================================
     # REALIZA MEDIÇÃO ATUAL
@@ -379,7 +312,7 @@ class TransmissionLossExperiment:
         progress_callback=None,
         message_callback=None,
         frf_update_callback=None,
-    ) -> FRFMeasurementResult:
+    ) -> MultiFRFMeasurementResult:
 
         if (
             self.state
@@ -403,24 +336,13 @@ class TransmissionLossExperiment:
 
         try:
 
-            acquisition_kwargs = {
-                "reference_channel_index": 0,
-                "response_channel_index": 1,
-                "progress_callback": progress_callback,
-                "message_callback": message_callback,
-            }
-
-            if frf_update_callback is not None:
-
-                acquisition_kwargs[
-                    "frf_update_callback"
-                ] = frf_update_callback
-
-            result = (
-                self.controller.acquire_frf(
-                    **acquisition_kwargs
-                )
+            result = self.controller.acquire_tl_load(
+                progress_callback=progress_callback,
+                message_callback=message_callback,
+                frf_update_callback=frf_update_callback,
             )
+            if set(result.measurements) != {1, 2, 4}:
+                raise TransmissionLossError("A aquisição deve fornecer H31, H32 e H34 simultaneamente.")
 
         except AcquisitionCancelled:
 
@@ -523,8 +445,8 @@ class TransmissionLossExperiment:
 
                 raise TransmissionLossError(
                     "A medição possui avisos de "
-                    "qualidade. Use accept_warning=True "
-                    "para aceitá-la conscientemente "
+                    "qualidade. Utilize o botão Aceitar com aviso "
+                    "para confirmar conscientemente "
                     "ou repita a medição."
                 )
 
@@ -543,13 +465,15 @@ class TransmissionLossExperiment:
         # Armazena
         # ----------------------------------------------------
 
-        self.measurements[
-            step
-        ] = StoredTLMeasurement(
-            step=step,
-            result=self.pending_measurement,
-            acceptance=acceptance,
-        )
+        # Aceitação atômica das três FRFs adquiridas na mesma terminação.
+        stored = {
+            frf_step: StoredTLMeasurement(
+                step=frf_step, result=self.pending_measurement.measurements[position],
+                acceptance=acceptance,
+            )
+            for position, frf_step in self.LOAD_FRF_STEPS[step].items()
+        }
+        self.measurements.update(stored)
 
         self.pending_measurement = None
 
@@ -565,7 +489,7 @@ class TransmissionLossExperiment:
 
         if (
             step
-            == TLMeasurementStep.H34_A
+            == TLLoadStep.LOAD_A
         ):
 
             self.state = (
@@ -776,7 +700,7 @@ class TransmissionLossExperiment:
     ) -> np.ndarray:
 
         for step in (
-            self.MEASUREMENT_SEQUENCE
+            self.FRF_SEQUENCE
         ):
 
             if step not in self.measurements:
@@ -797,7 +721,7 @@ class TransmissionLossExperiment:
         )
 
         for step in (
-            self.MEASUREMENT_SEQUENCE[1:]
+            self.FRF_SEQUENCE[1:]
         ):
 
             frequency = (
@@ -816,7 +740,7 @@ class TransmissionLossExperiment:
 
                 raise TransmissionLossError(
                     "Os vetores de frequência das "
-                    "seis medições não são iguais."
+                    "seis FRFs não são iguais."
                 )
 
         return reference_frequency
@@ -854,7 +778,7 @@ class TransmissionLossExperiment:
         ):
 
             raise TransmissionLossError(
-                "As seis medições precisam ser "
+                "As medições das cargas A e B precisam ser "
                 "concluídas antes do processamento."
             )
 
@@ -1213,7 +1137,7 @@ class TransmissionLossExperiment:
         )
 
         for step in (
-            self.MEASUREMENT_SEQUENCE
+            self.FRF_SEQUENCE
         ):
 
             coherence_mask &= (
@@ -1314,7 +1238,7 @@ class TransmissionLossExperiment:
     def reset(self) -> None:
         """
         Descarta todas as medições realizadas e
-        reinicia o ensaio desde H31_A.
+        reinicia o ensaio desde a carga A.
 
         Não altera as configurações do usuário.
         """

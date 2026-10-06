@@ -67,7 +67,13 @@ class ChannelConfig:
 
     max_spl: float = 130.0
 
+    # Posição física no tubo, independente da ordem dos canais da DAQ.
+    microphone_position: int | None = None
+
     def validate(self):
+
+        if self.microphone_position is not None and self.microphone_position not in (1, 2, 3, 4):
+            raise ValueError("A posição do microfone deve ser P1, P2, P3 ou P4.")
 
         if not self.physical_channel:
             raise ValueError(
@@ -304,7 +310,7 @@ class TransmissionLossConfig:
 
     reference_position: int = 3
 
-    mobile_positions: List[int] = field(
+    response_positions: List[int] = field(
         default_factory=lambda: [1, 2, 4]
     )
 
@@ -313,6 +319,9 @@ class TransmissionLossConfig:
     # ========================================================
 
     def validate(self):
+
+        if self.reference_position != 3 or self.response_positions != [1, 2, 4]:
+            raise ValueError("O ensaio TL usa P3 como referência e P1, P2 e P4 como respostas.")
 
         if self.tube_diameter <= 0:
 
@@ -429,14 +438,18 @@ class AppConfig:
         ):
             self.transmission_loss.validate()
 
-            active_channels = [
-                ch
-                for ch in self.channels
-                if ch.enabled
-            ]
+            self.tl_channel_indices()
 
-            if len(active_channels) < 2:
-                raise ValueError(
-                    "O ensaio de TL requer pelo menos "
-                    "dois canais ativos."
-                )
+    def tl_channel_indices(self) -> dict[int, int]:
+        """Mapeia posições P1–P4 aos índices das colunas efetivamente adquiridas."""
+        active = [channel for channel in self.channels if channel.enabled]
+        if len(active) != 4:
+            raise ValueError("O ensaio de TL requer exatamente quatro microfones ativos, em P1–P4.")
+        if any(channel.sensor_type != SensorType.MICROPHONE for channel in active):
+            raise ValueError("Todos os quatro canais do ensaio TL devem ser microfones.")
+        if len({channel.physical_channel for channel in active}) != 4:
+            raise ValueError("Os quatro microfones devem utilizar canais físicos diferentes.")
+        positions = [channel.microphone_position for channel in active]
+        if set(positions) != {1, 2, 3, 4}:
+            raise ValueError("Associe um único microfone a cada posição P1, P2, P3 e P4.")
+        return {position: index for index, position in enumerate(positions)}
